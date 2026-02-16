@@ -1,0 +1,212 @@
+"""r_monitor - Daily Interest Rate Monitor
+
+Entry point that orchestrates: fetch → store → report → send
+"""
+
+import logging
+import sys
+from datetime import datetime
+
+from src.config import DATA_DIR, REPORTS_DIR
+from src.fetchers.hkma import (
+    fetch_hibor_latest,
+    fetch_hkma_base_rate,
+    fetch_hkd_forward_rates,
+)
+from src.fetchers.banks import fetch_all_prime_rates
+from src.fetchers.ib_rates import fetch_ib_margin_rates
+from src.fetchers.fred import fetch_fed_funds_rate
+from src.fetchers.treasury import fetch_treasury_yields
+from src.fetchers.ny_fed import fetch_sofr_latest
+from src.fetchers.fedwatch import fetch_fedwatch_probabilities
+from src.storage import append_row, append_rows
+from src.report import generate_report
+from src.telegram_sender import send_report, build_summary
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
+
+
+def fetch_all() -> dict:
+    """Fetch all rates from all sources. Gracefully handles per-source failures."""
+    data = {}
+
+    # --- HKD Rates ---
+    logger.info("Fetching HIBOR...")
+    try:
+        data["hibor"] = fetch_hibor_latest()
+        logger.info(f"HIBOR: {data['hibor']}")
+    except Exception as e:
+        logger.error(f"HIBOR fetch failed: {e}")
+        data["hibor"] = {}
+
+    logger.info("Fetching HKMA Base Rate...")
+    try:
+        data["hkma_base_rate"] = fetch_hkma_base_rate()
+        logger.info(f"HKMA Base Rate: {data['hkma_base_rate']}")
+    except Exception as e:
+        logger.error(f"HKMA Base Rate fetch failed: {e}")
+        data["hkma_base_rate"] = {}
+
+    logger.info("Fetching bank Prime Rates...")
+    try:
+        data["prime_rates"] = fetch_all_prime_rates()
+        logger.info(f"Prime Rates: {data['prime_rates']}")
+    except Exception as e:
+        logger.error(f"Prime Rates fetch failed: {e}")
+        data["prime_rates"] = []
+
+    logger.info("Fetching IB Margin Rates...")
+    try:
+        data["ib_rates"] = fetch_ib_margin_rates()
+        logger.info(f"IB Rates: {data['ib_rates']}")
+    except Exception as e:
+        logger.error(f"IB Rates fetch failed: {e}")
+        data["ib_rates"] = {}
+
+    # --- USD Rates ---
+    logger.info("Fetching Fed Funds Rate...")
+    try:
+        data["fed_funds"] = fetch_fed_funds_rate()
+        logger.info(f"Fed Funds: {data['fed_funds']}")
+    except Exception as e:
+        logger.error(f"Fed Funds fetch failed: {e}")
+        data["fed_funds"] = {}
+
+    logger.info("Fetching SOFR...")
+    try:
+        data["sofr"] = fetch_sofr_latest()
+        logger.info(f"SOFR: {data['sofr']}")
+    except Exception as e:
+        logger.error(f"SOFR fetch failed: {e}")
+        data["sofr"] = {}
+
+    logger.info("Fetching Treasury Yields...")
+    try:
+        data["treasury"] = fetch_treasury_yields()
+        logger.info(f"Treasury: {len(data['treasury'])} maturities")
+    except Exception as e:
+        logger.error(f"Treasury fetch failed: {e}")
+        data["treasury"] = {}
+
+    # --- Forecasts ---
+    logger.info("Fetching FedWatch Probabilities...")
+    try:
+        data["fedwatch"] = fetch_fedwatch_probabilities()
+        logger.info(f"FedWatch: {len(data['fedwatch'])} meetings")
+    except Exception as e:
+        logger.error(f"FedWatch fetch failed: {e}")
+        data["fedwatch"] = []
+
+    logger.info("Fetching HKD Forward Rates...")
+    try:
+        data["hkd_forwards"] = fetch_hkd_forward_rates()
+        logger.info(f"HKD Forwards: {len(data['hkd_forwards'])} tenors")
+    except Exception as e:
+        logger.error(f"HKD Forwards fetch failed: {e}")
+        data["hkd_forwards"] = []
+
+    return data
+
+
+def store_data(data: dict) -> None:
+    """Store fetched data to CSV files for historical tracking."""
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # HIBOR
+    hibor = data.get("hibor", {})
+    if hibor:
+        row = {"date": hibor.get("date", today)}
+        row.update({k: v for k, v in hibor.items() if k != "date"})
+        append_row("hibor_daily", row)
+
+    # HKMA Base Rate
+    base = data.get("hkma_base_rate", {})
+    if base.get("rate") is not None:
+        append_row("hkma_base_rate", {"date": base.get("date", today), "rate": base["rate"]})
+
+    # Prime Rates
+    prime_rates = data.get("prime_rates", [])
+    if prime_rates:
+        row = {"date": today}
+        for pr in prime_rates:
+            if pr.get("rate") is not None:
+                row[pr["bank"]] = pr["rate"]
+        if len(row) > 1:
+            append_row("prime_rates", row)
+
+    # IB Rates
+    ib = data.get("ib_rates", {})
+    ib_row = {"date": today}
+    if ib.get("HKD") and ib["HKD"].get("rate") is not None:
+        ib_row["hkd_rate"] = ib["HKD"]["rate"]
+    if ib.get("USD") and ib["USD"].get("rate") is not None:
+        ib_row["usd_rate"] = ib["USD"]["rate"]
+    if len(ib_row) > 1:
+        append_row("ib_rates", ib_row)
+
+    # Fed Funds
+    fed = data.get("fed_funds", {})
+    if fed.get("effective") is not None:
+        append_row("fed_rates", {
+            "date": fed.get("date", today),
+            "rate": fed["effective"],
+            "target_upper": fed.get("target_upper"),
+            "target_lower": fed.get("target_lower"),
+        })
+
+    # SOFR
+    sofr = data.get("sofr", {})
+    if sofr.get("rate") is not None:
+        append_row("sofr", {"date": sofr.get("date", today), "rate": sofr["rate"]})
+
+    # Treasury Yields
+    treasury = data.get("treasury", {})
+    if treasury and treasury.get("date"):
+        row = {k: v for k, v in treasury.items()}
+        append_row("treasury_yields", row)
+
+
+def main():
+    """Main entry point."""
+    logger.info("=" * 60)
+    logger.info("r_monitor - Interest Rate Monitor")
+    logger.info(f"Run time: {datetime.now().isoformat()}")
+    logger.info("=" * 60)
+
+    # 1. Fetch all data
+    logger.info("Step 1: Fetching rates from all sources...")
+    data = fetch_all()
+
+    # 2. Store to CSV
+    logger.info("Step 2: Storing data to CSV...")
+    store_data(data)
+
+    # 3. Generate HTML report
+    logger.info("Step 3: Generating HTML report...")
+    html = generate_report(data)
+
+    # Save report locally
+    report_path = REPORTS_DIR / f"report_{datetime.now().strftime('%Y%m%d')}.html"
+    report_path.write_text(html, encoding="utf-8")
+    logger.info(f"Report saved to {report_path}")
+
+    # 4. Send via Telegram
+    logger.info("Step 4: Sending via Telegram...")
+    summary = build_summary(data)
+    ok = send_report(html, summary)
+    if ok:
+        logger.info("Telegram report sent successfully!")
+    else:
+        logger.warning("Telegram send had issues — check logs above")
+
+    logger.info("Done!")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
