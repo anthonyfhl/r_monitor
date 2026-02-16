@@ -1,4 +1,13 @@
-"""Fetch Prime Rates from major Hong Kong banks via web scraping."""
+"""Fetch Prime Rates from major Hong Kong banks via web scraping.
+
+Verified HTML structures (Feb 2026):
+- HSBC: <h2> containing "Hong Kong Dollar Best Lending Rate: X.XX%"
+  URL: https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/
+- BOC: JavaScript-rendered page, no static HTML (use HKMA proxy)
+- SCB: No public prime rate page (removed)
+- Hang Seng: div.rwd-showRates-rates after <h2> "HKD Prime rate"
+  Note: HKD field is sometimes empty on their site
+"""
 
 import logging
 import re
@@ -6,7 +15,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-from src.config import BANK_URLS, REQUEST_TIMEOUT, USER_AGENT
+from src.config import REQUEST_TIMEOUT, USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -16,96 +25,117 @@ SCRAPE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-
-def _find_rate_in_text(text: str) -> float | None:
-    """Extract a percentage rate from text like '5.00%' or 'P = 5.875%'."""
-    matches = re.findall(r"(\d+\.?\d*)\s*%", text)
-    if matches:
-        return float(matches[0])
-    return None
+# Correct URLs (verified Feb 2026)
+HSBC_PRIME_URL = "https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/"
+HANGSENG_PRIME_URL = "https://www.hangseng.com/en-hk/personal/banking/rates/prime-rates/"
 
 
 def fetch_hsbc_prime() -> dict:
-    """Fetch HSBC HK Best Lending Rate (Prime Rate)."""
+    """Fetch HSBC HK Best Lending Rate (Prime Rate).
+
+    Page contains: "Hong Kong Dollar Best Lending Rate: 5.00%"
+    """
     try:
-        resp = requests.get(BANK_URLS["HSBC"], headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(HSBC_PRIME_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-        # Look for prime rate / best lending rate text
-        for text_block in soup.stripped_strings:
-            lower = text_block.lower()
-            if "best lending rate" in lower or "prime rate" in lower or "blr" in lower:
-                rate = _find_rate_in_text(text_block)
-                if rate and 3.0 < rate < 10.0:
-                    return {"bank": "HSBC", "rate": rate}
-        # Fallback: search all text for patterns like "P = 5.875%"
-        full_text = soup.get_text()
-        match = re.search(r"(?:best lending rate|prime rate|BLR)[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
+        text = resp.text
+
+        # Primary: look for "Best Lending Rate: X.XX%"
+        match = re.search(
+            r"(?:Hong Kong Dollar\s+)?Best Lending Rate[:\s]*(\d+\.?\d*)\s*%",
+            text,
+            re.IGNORECASE,
+        )
         if match:
-            return {"bank": "HSBC", "rate": float(match.group(1))}
+            rate = float(match.group(1))
+            if 3.0 <= rate <= 10.0:
+                return {"bank": "HSBC", "rate": rate}
+
+        # Fallback: parse with BeautifulSoup
+        soup = BeautifulSoup(text, "lxml")
+        for el in soup.find_all(["h1", "h2", "h3", "p", "span", "div"]):
+            el_text = el.get_text(strip=True)
+            if "best lending rate" in el_text.lower():
+                pct = re.search(r"(\d+\.?\d*)\s*%", el_text)
+                if pct:
+                    rate = float(pct.group(1))
+                    if 3.0 <= rate <= 10.0:
+                        return {"bank": "HSBC", "rate": rate}
+
     except Exception as e:
         logger.error(f"Failed to fetch HSBC prime rate: {e}")
     return {"bank": "HSBC", "rate": None}
 
 
-def fetch_boc_prime() -> dict:
-    """Fetch Bank of China (Hong Kong) Prime Rate."""
-    try:
-        resp = requests.get(BANK_URLS["BOC"], headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-        full_text = soup.get_text()
-        match = re.search(r"(?:prime|best lending)[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
-        if match:
-            return {"bank": "BOC", "rate": float(match.group(1))}
-        # Try table cells
-        for td in soup.find_all("td"):
-            text = td.get_text(strip=True)
-            rate = _find_rate_in_text(text)
-            if rate and 3.0 < rate < 10.0:
-                return {"bank": "BOC", "rate": rate}
-    except Exception as e:
-        logger.error(f"Failed to fetch BOC prime rate: {e}")
-    return {"bank": "BOC", "rate": None}
-
-
-def fetch_scb_prime() -> dict:
-    """Fetch Standard Chartered HK Prime Rate."""
-    try:
-        resp = requests.get(BANK_URLS["SCB"], headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-        full_text = soup.get_text()
-        match = re.search(r"(?:prime|best lending)[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
-        if match:
-            return {"bank": "SCB", "rate": float(match.group(1))}
-    except Exception as e:
-        logger.error(f"Failed to fetch SCB prime rate: {e}")
-    return {"bank": "SCB", "rate": None}
-
-
 def fetch_hangseng_prime() -> dict:
-    """Fetch Hang Seng Bank Prime Rate."""
+    """Fetch Hang Seng Bank HKD Prime Rate.
+
+    Page has sections for HKD, USD, RMB prime rates.
+    HTML structure: <h2><span>HKD Prime rate</span></h2>
+    followed by <div class="rwd-showRates-rates">X.XX% p.a.</div>
+
+    Note: The HKD field is sometimes empty on their website.
+    In that case, we return None rather than picking up USD/RMB rates.
+    """
     try:
-        resp = requests.get(BANK_URLS["Hang Seng"], headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(HANGSENG_PRIME_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
+
+        # Look for HKD Prime rate section specifically
+        for h2 in soup.find_all("h2"):
+            h2_text = h2.get_text(strip=True).lower()
+            if "hkd" in h2_text and "prime" in h2_text:
+                # Find the rate container after this heading
+                parent = h2.parent
+                if parent:
+                    rate_div = parent.find("div", class_="rwd-showRates-rates")
+                    if rate_div:
+                        rate_text = rate_div.get_text(strip=True)
+                        pct = re.search(r"(\d+\.?\d*)\s*%", rate_text)
+                        if pct:
+                            rate = float(pct.group(1))
+                            if 3.0 <= rate <= 10.0:
+                                return {"bank": "Hang Seng", "rate": rate}
+
+                # Also try siblings
+                next_el = h2.find_next("div", class_="rwd-showRates-rates")
+                if next_el:
+                    rate_text = next_el.get_text(strip=True)
+                    pct = re.search(r"(\d+\.?\d*)\s*%", rate_text)
+                    if pct:
+                        rate = float(pct.group(1))
+                        if 3.0 <= rate <= 10.0:
+                            return {"bank": "Hang Seng", "rate": rate}
+
+        # Fallback: broader search for HKD prime in full text
         full_text = soup.get_text()
-        match = re.search(r"(?:prime|best lending)[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
+        match = re.search(r"HKD\s+Prime\s+rate[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
         if match:
-            return {"bank": "Hang Seng", "rate": float(match.group(1))}
+            rate = float(match.group(1))
+            if 3.0 <= rate <= 10.0:
+                return {"bank": "Hang Seng", "rate": rate}
+
     except Exception as e:
         logger.error(f"Failed to fetch Hang Seng prime rate: {e}")
     return {"bank": "Hang Seng", "rate": None}
 
 
 def fetch_all_prime_rates() -> list[dict]:
-    """Fetch prime rates from all tracked banks."""
-    fetchers = [fetch_hsbc_prime, fetch_boc_prime, fetch_scb_prime, fetch_hangseng_prime]
+    """Fetch prime rates from tracked banks.
+
+    Note: BOC (JavaScript-rendered) and SCB (no public page) are excluded.
+    """
+    fetchers = [fetch_hsbc_prime, fetch_hangseng_prime]
     results = []
     for fn in fetchers:
         try:
-            results.append(fn())
+            result = fn()
+            results.append(result)
+            if result.get("rate") is not None:
+                logger.info(f"{result['bank']} prime rate: {result['rate']}%")
+            else:
+                logger.warning(f"{result['bank']} prime rate: not available")
         except Exception as e:
             logger.error(f"Error in {fn.__name__}: {e}")
     return results

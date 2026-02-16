@@ -1,4 +1,17 @@
-"""Fetch Interactive Brokers margin borrowing rates via web scraping."""
+"""Fetch Interactive Brokers margin borrowing rates via web scraping.
+
+Verified HTML structure (Feb 2026):
+Table rows look like:
+  <tr>
+    <td>USD</td>
+    <td>0 ≤ 100,000</td>
+    <td><span class="text-price">5.140%</span> (BM + <span>1.5%</span>)</td>
+    <td><span class="text-price">6.140%</span> (BM + <span>2.5%</span>)</td>
+  </tr>
+
+We want the FIRST percentage in the IBKR Pro column (3rd cell) = total rate.
+NOT the BM spread which appears later.
+"""
 
 import logging
 import re
@@ -16,48 +29,37 @@ SCRAPE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# IB margin rates page
 IB_RATES_URL = "https://www.interactivebrokers.com/en/trading/margin-rates.php"
-IB_BENCHMARK_URL = "https://www.interactivebrokers.com/en/trading/margin-benchmarks.php"
 
 
-def _parse_rate_table(soup: BeautifulSoup, currency: str) -> dict | None:
-    """Parse the IB margin rate table for a specific currency.
+def _extract_rate_from_cell(cell) -> float | None:
+    """Extract the total rate (first percentage) from an IB rate cell.
 
-    Returns the default (first/lowest) tier rate.
+    Cell format: "5.140%(BM +1.5%)" or "<span class='text-price'>5.140%</span> (BM +...)"
+    We want 5.140, NOT 1.5.
     """
-    # Look for tables or sections mentioning the currency
-    tables = soup.find_all("table")
-    for table in tables:
-        header_text = ""
-        # Check preceding headers
-        prev = table.find_previous(["h2", "h3", "h4", "th", "caption"])
-        if prev:
-            header_text = prev.get_text(strip=True)
+    # Try text-price span first (most reliable)
+    price_span = cell.find("span", class_="text-price")
+    if price_span:
+        match = re.search(r"(\d+\.?\d*)\s*%", price_span.get_text(strip=True))
+        if match:
+            return float(match.group(1))
 
-        table_text = table.get_text()
-        if currency not in table_text and currency not in header_text:
-            continue
+    # Fallback: first percentage in the cell text
+    cell_text = cell.get_text(strip=True)
+    match = re.search(r"(\d+\.?\d*)\s*%", cell_text)
+    if match:
+        return float(match.group(1))
 
-        rows = table.find_all("tr")
-        for row in rows:
-            cells = row.find_all(["td", "th"])
-            row_text = " ".join(c.get_text(strip=True) for c in cells)
-            if currency in row_text:
-                # Find percentage values in this row
-                pct_matches = re.findall(r"(\d+\.?\d*)\s*%", row_text)
-                if pct_matches:
-                    # Return the rate (typically the spread or total rate)
-                    return {"currency": currency, "rate": float(pct_matches[-1])}
     return None
 
 
 def fetch_ib_margin_rates() -> dict:
-    """Fetch IB margin rates for HKD and USD.
+    """Fetch IB margin rates for HKD and USD (IBKR Pro, lowest tier).
 
     Returns dict like:
-        {"HKD": {"benchmark": "HKD HIBOR", "rate": 4.83},
-         "USD": {"benchmark": "Fed Funds", "rate": 6.83}}
+        {"HKD": {"currency": "HKD", "rate": 4.25},
+         "USD": {"currency": "USD", "rate": 5.14}}
     """
     result = {"HKD": None, "USD": None}
 
@@ -66,54 +68,37 @@ def fetch_ib_margin_rates() -> dict:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Try to find rates in the page
-        full_text = soup.get_text()
+        # Find the margin rates table
+        # It has headers: Currency, Tier, Rate Charged: IBKR Pro, Rate Charged: IBKR Lite
+        for table in soup.find_all("table"):
+            headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
+            # Check this is the right table
+            if not any("currency" in h for h in headers):
+                continue
+            if not any("rate" in h or "pro" in h.lower() for h in headers):
+                continue
 
-        # Look for HKD rate
-        hkd_match = re.search(
-            r"HKD[^%]*?(\d+\.?\d*)\s*%",
-            full_text,
-            re.IGNORECASE,
-        )
-        if hkd_match:
-            result["HKD"] = {"currency": "HKD", "rate": float(hkd_match.group(1))}
+            rows = table.find_all("tr")
+            for row in rows:
+                cells = row.find_all("td")
+                if len(cells) < 3:
+                    continue
 
-        # Look for USD rate
-        usd_match = re.search(
-            r"USD[^%]*?(\d+\.?\d*)\s*%",
-            full_text,
-            re.IGNORECASE,
-        )
-        if usd_match:
-            result["USD"] = {"currency": "USD", "rate": float(usd_match.group(1))}
+                currency_text = cells[0].get_text(strip=True)
 
-        # Also try structured table parsing
-        for currency in ["HKD", "USD"]:
-            if result[currency] is None:
-                parsed = _parse_rate_table(soup, currency)
-                if parsed:
-                    result[currency] = parsed
+                for target_ccy in ["USD", "HKD"]:
+                    if currency_text == target_ccy and result[target_ccy] is None:
+                        # cells[2] = IBKR Pro rate (total rate)
+                        rate = _extract_rate_from_cell(cells[2])
+                        if rate and 0.5 < rate < 20.0:
+                            result[target_ccy] = {"currency": target_ccy, "rate": rate}
+                            logger.info(f"IB {target_ccy} margin rate: {rate}%")
+
+            # Found the right table, stop searching
+            if result["USD"] is not None or result["HKD"] is not None:
+                break
 
     except Exception as e:
         logger.error(f"Failed to fetch IB margin rates: {e}")
-
-    # Try benchmark page as fallback/supplement
-    try:
-        resp2 = requests.get(IB_BENCHMARK_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
-        resp2.raise_for_status()
-        soup2 = BeautifulSoup(resp2.text, "lxml")
-        text2 = soup2.get_text()
-
-        # Extract benchmark rates
-        for currency in ["HKD", "USD"]:
-            bm_match = re.search(
-                rf"{currency}\s+.*?BM\s*[:=]?\s*(\d+\.?\d*)\s*%",
-                text2,
-                re.IGNORECASE,
-            )
-            if bm_match and result.get(currency):
-                result[currency]["benchmark_rate"] = float(bm_match.group(1))
-    except Exception as e:
-        logger.debug(f"Could not fetch IB benchmark rates: {e}")
 
     return result
