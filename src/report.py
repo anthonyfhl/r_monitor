@@ -271,7 +271,7 @@ def generate_report(data: dict) -> str:
 
     # HIBOR tenors
     hibor = data.get("hibor", {})
-    tenor_keys = ["Overnight", "1 Week", "1 Month", "2 Months", "3 Months", "6 Months", "12 Months"]
+    tenor_keys = ["Overnight", "1 Week", "1 Month", "3 Months", "6 Months", "9 Months", "12 Months"]
     for tenor in tenor_keys:
         val = hibor.get(tenor)
         if val is not None:

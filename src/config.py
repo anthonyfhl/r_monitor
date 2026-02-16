@@ -52,7 +52,7 @@ BANK_URLS = {
 }
 
 # --- Display names ---
-HIBOR_TENORS = ["Overnight", "1 Week", "1 Month", "2 Months", "3 Months", "6 Months", "12 Months"]
+HIBOR_TENORS = ["Overnight", "1 Week", "1 Month", "3 Months", "6 Months", "9 Months", "12 Months"]
 
 # --- HTTP ---
 REQUEST_TIMEOUT = 30

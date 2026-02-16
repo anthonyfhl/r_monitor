@@ -17,12 +17,19 @@ def _csv_path(name: str) -> Path:
 
 
 def load_csv(name: str) -> pd.DataFrame:
-    """Load a CSV file into a DataFrame. Returns empty DataFrame if file doesn't exist."""
+    """Load a CSV file into a DataFrame. Returns empty DataFrame if file doesn't exist.
+
+    Dates are kept as strings to avoid mixed-type comparison issues.
+    Use pd.to_datetime() explicitly when date arithmetic is needed.
+    """
     path = _csv_path(name)
     if not path.exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(path, parse_dates=["date"] if "date" in _peek_columns(path) else False)
+        df = pd.read_csv(path)
+        # Ensure date column is always string for consistent comparisons
+        if "date" in df.columns:
+            df["date"] = df["date"].astype(str)
         return df
     except Exception as e:
         logger.error(f"Failed to load {path}: {e}")
@@ -80,6 +87,7 @@ def append_rows(name: str, rows: list[dict]) -> None:
     new_df = pd.DataFrame(new_rows)
     df = pd.concat([df, new_df], ignore_index=True)
     if "date" in df.columns:
+        df["date"] = df["date"].astype(str)
         df = df.sort_values("date").reset_index(drop=True)
     save_csv(name, df)
     logger.info(f"Appended {len(new_rows)} new rows to {name}")
