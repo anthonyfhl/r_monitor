@@ -47,7 +47,6 @@ FEDWATCH_URL = "https://www.investing.com/central-banks/fed-rate-monitor"
 BANK_URLS = {
     "HSBC": "https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/",
     "DBS": "https://www.dbs.com.hk/personal/loans/home-loans/home-advice/interestrate.html",
-    "Public Bank": "https://www.publicbank.com.hk/en/usefultools/rates/hkdprimerates",
 }
 
 # --- Display names ---

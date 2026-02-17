@@ -132,7 +132,7 @@ REPORT_TEMPLATE = Template("""\
       {% endfor %}
     </tbody>
   </table>
-  <p class="source">Sources: HKMA, HSBC, DBS, Public Bank, Interactive Brokers</p>
+  <p class="source">Sources: HKMA, HSBC, DBS, Interactive Brokers</p>
 </div>
 
 {# ===== USD RATES ===== #}
@@ -338,11 +338,16 @@ def generate_report(data: dict) -> str:
                 "sparkline": "",
             })
 
-    # Prime rates
+    # Prime rates — label with 細P / 大P tier
+    _prime_labels = {
+        "HSBC": "細P Prime (HSBC)",
+        "DBS": "大P Prime (DBS)",
+    }
     for pr in data.get("prime_rates", []):
         if pr.get("rate") is not None:
+            label = _prime_labels.get(pr["bank"], f"Prime Rate ({pr['bank']})")
             hkd_rates.append({
-                "name": f"Prime Rate ({pr['bank']})",
+                "name": label,
                 "value": _fmt_rate(pr["rate"]),
                 "change_7d": _change_badge(None),
                 "change_30d": _change_badge(None),
