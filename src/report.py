@@ -1,11 +1,11 @@
 """Generate HTML report for interest rate monitoring."""
 
 import logging
+import math
 from datetime import datetime
 
+import pandas as pd
 from jinja2 import Template
-
-import math
 
 from src.storage import get_change, load_csv
 
@@ -55,6 +55,192 @@ def _fmt_rate(val) -> str:
         return f"{float(val):.4f}%"
     except (ValueError, TypeError):
         return str(val)
+
+
+def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
+    """Build an inline SVG multi-series line chart of HKD rates over time.
+
+    Series: HIBOR O/N, 1M, 3M, 12M + 細P + 大P + IB HKD
+    Uses data from hibor_daily.csv, prime_rates.csv, ib_rates.csv
+    """
+    pad_left, pad_right, pad_top, pad_bottom = 55, 20, 20, 40
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    # --- Load data ---
+    hibor_df = load_csv("hibor_daily")
+    if hibor_df.empty or "date" not in hibor_df.columns:
+        return ""
+
+    hibor_df["date"] = pd.to_datetime(hibor_df["date"])
+    hibor_df = hibor_df.sort_values("date")
+
+    # Series config: (label, color, csv_name, column)
+    series_defs = [
+        ("HIBOR O/N", "#60a5fa", "hibor_daily", "Overnight"),
+        ("HIBOR 1M", "#38bdf8", "hibor_daily", "1 Month"),
+        ("HIBOR 3M", "#22d3ee", "hibor_daily", "3 Months"),
+        ("HIBOR 12M", "#a78bfa", "hibor_daily", "12 Months"),
+    ]
+
+    # Also load prime rates & IB rates if available
+    prime_df = load_csv("prime_rates")
+    if not prime_df.empty and "date" in prime_df.columns:
+        prime_df["date"] = pd.to_datetime(prime_df["date"])
+        prime_df = prime_df.sort_values("date")
+        if "HSBC" in prime_df.columns:
+            series_defs.append(("細P (HSBC)", "#f97316", "prime_rates", "HSBC"))
+        if "DBS" in prime_df.columns:
+            series_defs.append(("大P (DBS)", "#ef4444", "prime_rates", "DBS"))
+
+    ib_df = load_csv("ib_rates")
+    if not ib_df.empty and "date" in ib_df.columns:
+        ib_df["date"] = pd.to_datetime(ib_df["date"])
+        ib_df = ib_df.sort_values("date")
+        if "hkd_rate" in ib_df.columns:
+            series_defs.append(("IB HKD", "#fbbf24", "ib_rates", "hkd_rate"))
+
+    # --- Determine global date/rate range ---
+    dfs = {"hibor_daily": hibor_df}
+    if not prime_df.empty:
+        dfs["prime_rates"] = prime_df
+    if not ib_df.empty:
+        dfs["ib_rates"] = ib_df
+
+    all_dates = []
+    all_vals = []
+    for label, color, csv_name, col in series_defs:
+        df = dfs.get(csv_name)
+        if df is None or col not in df.columns:
+            continue
+        s = df[["date", col]].dropna(subset=[col])
+        if not s.empty:
+            all_dates.extend(s["date"].tolist())
+            all_vals.extend(s[col].astype(float).tolist())
+
+    if not all_dates or not all_vals:
+        return ""
+
+    date_min = min(all_dates)
+    date_max = max(all_dates)
+    date_range = (date_max - date_min).total_seconds()
+    if date_range == 0:
+        return ""
+
+    val_min = min(all_vals)
+    val_max = max(all_vals)
+    val_range = val_max - val_min
+    if val_range == 0:
+        val_range = 1
+    # Add 5% padding
+    val_min -= val_range * 0.05
+    val_max += val_range * 0.05
+    val_range = val_max - val_min
+
+    def x_pos(dt):
+        return pad_left + ((dt - date_min).total_seconds() / date_range) * plot_w
+
+    def y_pos(v):
+        return pad_top + plot_h - ((v - val_min) / val_range) * plot_h
+
+    # --- Build SVG ---
+    svg_parts = [
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="background:#0f172a;border-radius:8px">'
+    ]
+
+    # Grid lines and Y-axis labels
+    # Nice round tick values
+    tick_step = 0.5
+    if val_range > 4:
+        tick_step = 1.0
+    elif val_range < 1:
+        tick_step = 0.1
+
+    y_tick = math.ceil(val_min / tick_step) * tick_step
+    while y_tick <= val_max:
+        yp = y_pos(y_tick)
+        svg_parts.append(
+            f'<line x1="{pad_left}" y1="{yp:.1f}" x2="{width - pad_right}" y2="{yp:.1f}" '
+            f'stroke="#1e293b" stroke-width="1"/>'
+        )
+        svg_parts.append(
+            f'<text x="{pad_left - 5}" y="{yp + 4:.1f}" text-anchor="end" '
+            f'fill="#64748b" font-size="10">{y_tick:.1f}%</text>'
+        )
+        y_tick += tick_step
+
+    # X-axis: year labels
+    for year in range(date_min.year, date_max.year + 2):
+        dt = pd.Timestamp(f"{year}-01-01")
+        if dt < date_min or dt > date_max:
+            continue
+        xp = x_pos(dt)
+        svg_parts.append(
+            f'<line x1="{xp:.1f}" y1="{pad_top}" x2="{xp:.1f}" y2="{height - pad_bottom}" '
+            f'stroke="#1e293b" stroke-width="1"/>'
+        )
+        svg_parts.append(
+            f'<text x="{xp:.1f}" y="{height - pad_bottom + 15}" text-anchor="middle" '
+            f'fill="#64748b" font-size="10">{year}</text>'
+        )
+    # Also add mid-year markers
+    for year in range(date_min.year, date_max.year + 2):
+        dt = pd.Timestamp(f"{year}-07-01")
+        if dt < date_min or dt > date_max:
+            continue
+        xp = x_pos(dt)
+        svg_parts.append(
+            f'<line x1="{xp:.1f}" y1="{pad_top}" x2="{xp:.1f}" y2="{height - pad_bottom}" '
+            f'stroke="#1e293b" stroke-width="0.5" stroke-dasharray="4,4"/>'
+        )
+
+    # Plot each series
+    legend_items = []
+    for label, color, csv_name, col in series_defs:
+        df = dfs.get(csv_name)
+        if df is None or col not in df.columns:
+            continue
+        s = df[["date", col]].dropna(subset=[col]).copy()
+        s[col] = s[col].astype(float)
+        if s.empty:
+            continue
+
+        # Downsample if too many points (keep every Nth point for SVG performance)
+        if len(s) > 500:
+            step = len(s) // 400
+            s = s.iloc[::step]
+
+        points = []
+        for _, row in s.iterrows():
+            px = x_pos(row["date"])
+            py = y_pos(row[col])
+            points.append(f"{px:.1f},{py:.1f}")
+
+        if points:
+            polyline = " ".join(points)
+            svg_parts.append(
+                f'<polyline points="{polyline}" fill="none" stroke="{color}" '
+                f'stroke-width="1.5" opacity="0.85"/>'
+            )
+            legend_items.append((label, color))
+
+    # Legend (bottom-right)
+    leg_x = pad_left + 10
+    leg_y = pad_top + 5
+    for i, (label, color) in enumerate(legend_items):
+        lx = leg_x + (i % 4) * 130
+        ly = leg_y + (i // 4) * 16
+        svg_parts.append(
+            f'<line x1="{lx}" y1="{ly + 4}" x2="{lx + 16}" y2="{ly + 4}" '
+            f'stroke="{color}" stroke-width="2.5"/>'
+        )
+        svg_parts.append(
+            f'<text x="{lx + 20}" y="{ly + 8}" fill="#94a3b8" font-size="10">{label}</text>'
+        )
+
+    svg_parts.append("</svg>")
+    return "\n".join(svg_parts)
 
 
 REPORT_TEMPLATE = Template("""\
@@ -133,6 +319,12 @@ REPORT_TEMPLATE = Template("""\
     </tbody>
   </table>
   <p class="source">Sources: HKMA, HSBC, DBS, Interactive Brokers</p>
+  {% if hkd_chart %}
+  <div style="margin-top:12px">
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Historical HKD Rates</div>
+    {{ hkd_chart }}
+  </div>
+  {% endif %}
 </div>
 
 {# ===== USD RATES ===== #}
@@ -325,7 +517,7 @@ def generate_report(data: dict) -> str:
 
     # HIBOR tenors
     hibor = data.get("hibor", {})
-    tenor_keys = ["Overnight", "1 Week", "1 Month", "3 Months", "6 Months", "9 Months", "12 Months"]
+    tenor_keys = ["Overnight", "1 Month", "3 Months", "12 Months"]
     for tenor in tenor_keys:
         val = hibor.get(tenor)
         if val is not None:
@@ -447,12 +639,16 @@ def generate_report(data: dict) -> str:
     esaver_current = data.get("esaver", {})
     esaver_history = _build_esaver_history(esaver_current)
 
+    # --- HKD Chart ---
+    hkd_chart = _build_hkd_chart_svg()
+
     # --- Render ---
     html = REPORT_TEMPLATE.render(
         report_date=now.strftime("%Y-%m-%d"),
         report_time=now.strftime("%H:%M"),
         hkd_rates=hkd_rates,
         usd_rates=usd_rates,
+        hkd_chart=hkd_chart,
         treasury_yields=treasury_yields,
         fedwatch=fedwatch,
         fedwatch_ranges=fedwatch_ranges,

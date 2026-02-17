@@ -22,14 +22,11 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
-# Maps HKMA API field names -> display names
+# Maps HKMA API field names -> display names (4 key tenors only)
 HIBOR_FIELD_MAP = {
     "ir_overnight": "Overnight",
-    "ir_1w": "1 Week",
     "ir_1m": "1 Month",
     "ir_3m": "3 Months",
-    "ir_6m": "6 Months",
-    "ir_9m": "9 Months",
     "ir_12m": "12 Months",
 }
 
