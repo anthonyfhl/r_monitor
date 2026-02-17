@@ -75,12 +75,13 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
     hibor_df["date"] = pd.to_datetime(hibor_df["date"])
     hibor_df = hibor_df.sort_values("date")
 
-    # Series config: (label, color, csv_name, column)
+    # Series config: (label, color, csv_name, column, step)
+    # step=True draws horizontal-then-vertical step lines (for rates that jump)
     series_defs = [
-        ("HIBOR O/N", "#60a5fa", "hibor_daily", "Overnight"),
-        ("HIBOR 1M", "#38bdf8", "hibor_daily", "1 Month"),
-        ("HIBOR 3M", "#22d3ee", "hibor_daily", "3 Months"),
-        ("HIBOR 12M", "#a78bfa", "hibor_daily", "12 Months"),
+        ("HIBOR O/N", "#60a5fa", "hibor_daily", "Overnight", False),
+        ("HIBOR 1M", "#38bdf8", "hibor_daily", "1 Month", False),
+        ("HIBOR 3M", "#22d3ee", "hibor_daily", "3 Months", False),
+        ("HIBOR 12M", "#a78bfa", "hibor_daily", "12 Months", False),
     ]
 
     # Also load prime rates & IB rates if available
@@ -89,16 +90,16 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
         prime_df["date"] = pd.to_datetime(prime_df["date"])
         prime_df = prime_df.sort_values("date")
         if "HSBC" in prime_df.columns:
-            series_defs.append(("細P (HSBC)", "#f97316", "prime_rates", "HSBC"))
+            series_defs.append(("細P (HSBC)", "#f97316", "prime_rates", "HSBC", True))
         if "DBS" in prime_df.columns:
-            series_defs.append(("大P (DBS)", "#ef4444", "prime_rates", "DBS"))
+            series_defs.append(("大P (DBS)", "#ef4444", "prime_rates", "DBS", True))
 
     ib_df = load_csv("ib_rates")
     if not ib_df.empty and "date" in ib_df.columns:
         ib_df["date"] = pd.to_datetime(ib_df["date"])
         ib_df = ib_df.sort_values("date")
         if "hkd_rate" in ib_df.columns:
-            series_defs.append(("IB HKD", "#fbbf24", "ib_rates", "hkd_rate"))
+            series_defs.append(("IB HKD", "#fbbf24", "ib_rates", "hkd_rate", False))
 
     # --- Determine global date/rate range ---
     dfs = {"hibor_daily": hibor_df}
@@ -109,7 +110,7 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
 
     all_dates = []
     all_vals = []
-    for label, color, csv_name, col in series_defs:
+    for label, color, csv_name, col, step in series_defs:
         df = dfs.get(csv_name)
         if df is None or col not in df.columns:
             continue
@@ -197,7 +198,8 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
 
     # Plot each series
     legend_items = []
-    for label, color, csv_name, col in series_defs:
+    today = pd.Timestamp.now().normalize()
+    for label, color, csv_name, col, is_step in series_defs:
         df = dfs.get(csv_name)
         if df is None or col not in df.columns:
             continue
@@ -206,16 +208,36 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
         if s.empty:
             continue
 
-        # Downsample if too many points (keep every Nth point for SVG performance)
-        if len(s) > 500:
-            step = len(s) // 400
-            s = s.iloc[::step]
+        if is_step:
+            # Step-function series: horizontal then vertical at each change
+            # Extend the last known value to today for a complete picture
+            points = []
+            rows = list(s.itertuples(index=False))
+            for i, row in enumerate(rows):
+                dt, val = row[0], row[1]
+                if i > 0:
+                    # Horizontal line from previous y to this x
+                    prev_val = rows[i - 1][1]
+                    points.append(f"{x_pos(dt):.1f},{y_pos(prev_val):.1f}")
+                # Vertical line to new y
+                points.append(f"{x_pos(dt):.1f},{y_pos(val):.1f}")
+            # Extend last value to today (or date_max)
+            if rows:
+                last_val = rows[-1][1]
+                end_dt = min(today, date_max)
+                if end_dt > rows[-1][0]:
+                    points.append(f"{x_pos(end_dt):.1f},{y_pos(last_val):.1f}")
+        else:
+            # Continuous series — downsample if too many points
+            if len(s) > 500:
+                ds_step = len(s) // 400
+                s = s.iloc[::ds_step]
 
-        points = []
-        for _, row in s.iterrows():
-            px = x_pos(row["date"])
-            py = y_pos(row[col])
-            points.append(f"{px:.1f},{py:.1f}")
+            points = []
+            for _, row in s.iterrows():
+                px = x_pos(row["date"])
+                py = y_pos(row[col])
+                points.append(f"{px:.1f},{py:.1f}")
 
         if points:
             polyline = " ".join(points)
