@@ -40,15 +40,14 @@ TREASURY_YIELD_URL = "https://home.treasury.gov/resource-center/data-chart-cente
 # --- IB ---
 IB_MARGIN_URL = "https://www.interactivebrokers.com/en/trading/margin-rates.php"
 
-# --- CME FedWatch ---
-CME_FEDWATCH_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html"
+# --- FedWatch (via investing.com) ---
+FEDWATCH_URL = "https://www.investing.com/central-banks/fed-rate-monitor"
 
 # --- Bank websites for P-rate ---
 BANK_URLS = {
-    "HSBC": "https://www.hsbc.com.hk/mortgages/tools/hibor-rate/",
-    "BOC": "https://www.bochk.com/en/investment/rates/hkprime.html",
-    "SCB": "https://www.sc.com/hk/deposits/board-rates/",
-    "Hang Seng": "https://www.hangseng.com/en-hk/personal/banking/rates/prime-rates/",
+    "HSBC": "https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/",
+    "DBS": "https://www.dbs.com.hk/personal/loans/home-loans/home-advice/interestrate.html",
+    "Public Bank": "https://www.publicbank.com.hk/en/usefultools/rates/hkdprimerates",
 }
 
 # --- Display names ---

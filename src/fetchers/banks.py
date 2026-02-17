@@ -1,12 +1,14 @@
 """Fetch Prime Rates from major Hong Kong banks via web scraping.
 
 Verified HTML structures (Feb 2026):
-- HSBC: <h2> containing "Hong Kong Dollar Best Lending Rate: X.XX%"
+- HSBC: "Hong Kong Dollar Best Lending Rate: 5.00%" in <h2>
   URL: https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/
-- BOC: JavaScript-rendered page, no static HTML (use HKMA proxy)
-- SCB: No public prime rate page (removed)
-- Hang Seng: div.rwd-showRates-rates after <h2> "HKD Prime rate"
-  Note: HKD field is sometimes empty on their site
+- DBS: Table with "DBS Prime (% p.a.)" column, rows like ["26-Sep-25", "5.375"]
+  URL: https://www.dbs.com.hk/personal/loans/home-loans/home-advice/interestrate.html
+- Public Bank: "5.250% p.a." text after "HKD Prime Rate" heading
+  URL: https://www.publicbank.com.hk/en/usefultools/rates/hkdprimerates
+
+Removed: BOC (JS-rendered), SCB (no public page), Hang Seng (same as HSBC by definition)
 """
 
 import logging
@@ -25,9 +27,10 @@ SCRAPE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Correct URLs (verified Feb 2026)
+# Verified URLs (Feb 2026)
 HSBC_PRIME_URL = "https://www.hsbc.com.hk/investments/market-information/hk/lending-rate/"
-HANGSENG_PRIME_URL = "https://www.hangseng.com/en-hk/personal/banking/rates/prime-rates/"
+DBS_PRIME_URL = "https://www.dbs.com.hk/personal/loans/home-loans/home-advice/interestrate.html"
+PUBLIC_BANK_PRIME_URL = "https://www.publicbank.com.hk/en/usefultools/rates/hkdprimerates"
 
 
 def fetch_hsbc_prime() -> dict:
@@ -67,66 +70,90 @@ def fetch_hsbc_prime() -> dict:
     return {"bank": "HSBC", "rate": None}
 
 
-def fetch_hangseng_prime() -> dict:
-    """Fetch Hang Seng Bank HKD Prime Rate.
+def fetch_dbs_prime() -> dict:
+    """Fetch DBS Hong Kong HKD Prime Rate.
 
-    Page has sections for HKD, USD, RMB prime rates.
-    HTML structure: <h2><span>HKD Prime rate</span></h2>
-    followed by <div class="rwd-showRates-rates">X.XX% p.a.</div>
-
-    Note: The HKD field is sometimes empty on their website.
-    In that case, we return None rather than picking up USD/RMB rates.
+    Page has table: "Last 5 updates of DBS HKD Prime"
+    Rows: ["26-Sep-25", "5.375"]
+    First data row is the current rate.
     """
     try:
-        resp = requests.get(HANGSENG_PRIME_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(DBS_PRIME_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Look for HKD Prime rate section specifically
-        for h2 in soup.find_all("h2"):
-            h2_text = h2.get_text(strip=True).lower()
-            if "hkd" in h2_text and "prime" in h2_text:
-                # Find the rate container after this heading
-                parent = h2.parent
-                if parent:
-                    rate_div = parent.find("div", class_="rwd-showRates-rates")
-                    if rate_div:
-                        rate_text = rate_div.get_text(strip=True)
-                        pct = re.search(r"(\d+\.?\d*)\s*%", rate_text)
-                        if pct:
-                            rate = float(pct.group(1))
-                            if 3.0 <= rate <= 10.0:
-                                return {"bank": "Hang Seng", "rate": rate}
+        for table in soup.find_all("table"):
+            table_text = table.get_text().lower()
+            if "prime" not in table_text and "dbs" not in table_text:
+                continue
 
-                # Also try siblings
-                next_el = h2.find_next("div", class_="rwd-showRates-rates")
-                if next_el:
-                    rate_text = next_el.get_text(strip=True)
-                    pct = re.search(r"(\d+\.?\d*)\s*%", rate_text)
-                    if pct:
-                        rate = float(pct.group(1))
+            rows = table.find_all("tr")
+            for row in rows:
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 2:
+                    # Second cell should be the rate like "5.375"
+                    try:
+                        rate = float(cells[1])
                         if 3.0 <= rate <= 10.0:
-                            return {"bank": "Hang Seng", "rate": rate}
+                            return {"bank": "DBS", "rate": rate}
+                    except ValueError:
+                        continue
 
-        # Fallback: broader search for HKD prime in full text
+    except Exception as e:
+        logger.error(f"Failed to fetch DBS prime rate: {e}")
+    return {"bank": "DBS", "rate": None}
+
+
+def fetch_public_bank_prime() -> dict:
+    """Fetch Public Bank (Hong Kong) HKD Prime Rate.
+
+    Page text: "HKD Prime Rate ... 5.250% p.a."
+    Also has history table with "Effective Date | HKD Prime Rate" rows.
+    """
+    try:
+        resp = requests.get(PUBLIC_BANK_PRIME_URL, headers=SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        # Look for the main rate display: "X.XXX% p.a."
+        # Avoid matching time strings like "17:59" by requiring "% p.a."
         full_text = soup.get_text()
-        match = re.search(r"HKD\s+Prime\s+rate[^%]*?(\d+\.?\d*)\s*%", full_text, re.IGNORECASE)
+        match = re.search(r"(\d+\.\d{2,3})\s*%\s*p\.a\.", full_text, re.IGNORECASE)
         if match:
             rate = float(match.group(1))
             if 3.0 <= rate <= 10.0:
-                return {"bank": "Hang Seng", "rate": rate}
+                return {"bank": "Public Bank", "rate": rate}
+
+        # Fallback: look in table rows
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            for row in rows:
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 2:
+                    for cell in cells:
+                        pct = re.search(r"(\d+\.\d{2,3})\s*%", cell)
+                        if pct:
+                            rate = float(pct.group(1))
+                            if 3.0 <= rate <= 10.0:
+                                return {"bank": "Public Bank", "rate": rate}
 
     except Exception as e:
-        logger.error(f"Failed to fetch Hang Seng prime rate: {e}")
-    return {"bank": "Hang Seng", "rate": None}
+        logger.error(f"Failed to fetch Public Bank prime rate: {e}")
+    return {"bank": "Public Bank", "rate": None}
 
 
 def fetch_all_prime_rates() -> list[dict]:
     """Fetch prime rates from tracked banks.
 
-    Note: BOC (JavaScript-rendered) and SCB (no public page) are excluded.
+    Banks tracked:
+    - HSBC (5.00%) — the "big bank" P rate, Hang Seng follows same rate
+    - DBS (5.375%) — smaller bank, slightly higher P rate
+    - Public Bank (5.250%) — smaller bank
+
+    Not tracked: BOC (JS-rendered), SCB (no public page),
+    Hang Seng (same as HSBC by definition), BEA/ICBC/Citi/CCB (JS-rendered)
     """
-    fetchers = [fetch_hsbc_prime, fetch_hangseng_prime]
+    fetchers = [fetch_hsbc_prime, fetch_dbs_prime, fetch_public_bank_prime]
     results = []
     for fn in fetchers:
         try:

@@ -26,6 +26,20 @@ reports/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Plan file
 PLAN.md
+
+# Downloaded T&C PDFs (used for historical data extraction only)
+data/esaver_tnc/
+temp_pdfs/
+
+# Claude Code
+.claude/
+
+# Logs
+logs/
+
+# Batch scripts (local only)
+run_daily.bat

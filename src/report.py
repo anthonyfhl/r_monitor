@@ -5,7 +5,9 @@ from datetime import datetime
 
 from jinja2 import Template
 
-from src.storage import get_change
+import math
+
+from src.storage import get_change, load_csv
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +101,11 @@ REPORT_TEMPLATE = Template("""\
     background: #38bdf8; min-width: 2px; vertical-align: middle;
   }
   .highlight { background: #1e3a5f; }
+  .current-row { background: #1e3a5f; border-left: 3px solid #38bdf8; }
+  .na { color: #64748b; }
+  .esaver-table td { font-size: 12px; padding: 5px 8px; }
+  .esaver-table th { font-size: 10px; padding: 6px 8px; }
+  .note-cell { white-space: normal; max-width: 120px; font-size: 11px; color: #94a3b8; }
 </style>
 </head>
 <body>
@@ -125,7 +132,7 @@ REPORT_TEMPLATE = Template("""\
       {% endfor %}
     </tbody>
   </table>
-  <p class="source">Sources: HKMA, HSBC, BOC, SCB, Hang Seng, Interactive Brokers</p>
+  <p class="source">Sources: HKMA, HSBC, DBS, Public Bank, Interactive Brokers</p>
 </div>
 
 {# ===== USD RATES ===== #}
@@ -149,6 +156,53 @@ REPORT_TEMPLATE = Template("""\
   </table>
   <p class="source">Sources: Federal Reserve (FRED), NY Fed, US Treasury, Interactive Brokers</p>
 </div>
+
+{# ===== DBS eSAVER PROMOTIONS ===== #}
+{% if esaver_history %}
+<div class="section">
+  <div class="section-title">&#128179; DBS e$aver Savings Promotion (Existing Customers)</div>
+  {% if esaver_current %}
+  <p style="color:#94a3b8;font-size:12px;margin-bottom:8px;">
+    Current: <b style="color:#38bdf8">{{ esaver_current.promo_month or 'N/A' }}</b>
+    &mdash; Register by {{ esaver_current.reg_end or '?' }}
+    &mdash; Reward until {{ esaver_current.reward_end or '?' }}
+    &mdash; Min HK${{ "{:,.0f}".format(esaver_current.min_hkd) if esaver_current.min_hkd else 'N/A' }}
+    / US${{ "{:,.0f}".format(esaver_current.min_usd) if esaver_current.min_usd else 'N/A' }}
+  </p>
+  {% endif %}
+  <table class="esaver-table">
+    <thead>
+      <tr>
+        <th>Month</th>
+        <th>HKD e$aver</th>
+        <th>USD e$aver</th>
+        <th>Total HKD</th><th>Total USD</th>
+        <th>Level-Up</th>
+        <th>Excludes</th>
+        <th>Reg End</th><th>Reward End</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in esaver_history %}
+      <tr{% if row.is_current %} class="current-row"{% endif %}>
+        <td class="rate-name">{{ row.promo_month }}</td>
+        <td class="rate-value">{% if row.hkd_esaver_rate %}{{ "%.3f"|format(row.hkd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value">{% if row.usd_esaver_rate %}{{ "%.3f"|format(row.usd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value" style="color:#22c55e">{% if row.max_total_hkd %}{{ "%.2f"|format(row.max_total_hkd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value" style="color:#22c55e">{% if row.max_total_usd %}{{ "%.2f"|format(row.max_total_usd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td>{% if row.has_levelup == 'yes' %}<span style="color:#fbbf24">Yes</span>{% else %}<span class="na">No</span>{% endif %}</td>
+        <td class="note-cell">{{ row.excludes or '' }}</td>
+        <td style="font-size:11px">{{ row.reg_end or '' }}</td>
+        <td style="font-size:11px">{{ row.reward_end or '' }}</td>
+        <td class="note-cell">{{ row.notes or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Source: DBS Bank (Hong Kong) &mdash; T&amp;Cs for Existing Customers</p>
+</div>
+{% endif %}
 
 {# ===== US TREASURY YIELD CURVE ===== #}
 {% if treasury_yields %}
@@ -177,7 +231,7 @@ REPORT_TEMPLATE = Template("""\
   <div class="section-title">&#128302; Market Rate Expectations</div>
 
   {% if fedwatch %}
-  <h4 style="color:#94a3b8;font-size:12px;margin-bottom:6px;">CME FedWatch - FOMC Meeting Probabilities</h4>
+  <h4 style="color:#94a3b8;font-size:12px;margin-bottom:6px;">FedWatch - FOMC Meeting Rate Probabilities</h4>
   <table class="forecast-table">
     <thead>
       <tr>
@@ -203,9 +257,9 @@ REPORT_TEMPLATE = Template("""\
       {% endfor %}
     </tbody>
   </table>
-  <p class="source">Source: CME Group FedWatch Tool (based on Fed Funds Futures)</p>
+  <p class="source">Source: Investing.com Fed Rate Monitor (based on Fed Funds Futures)</p>
   {% else %}
-  <p style="color:#94a3b8;font-size:12px;">FedWatch data unavailable — CME may restrict automated access.</p>
+  <p style="color:#94a3b8;font-size:12px;">FedWatch data unavailable.</p>
   {% endif %}
 
   {% if hkd_forwards %}
@@ -384,6 +438,10 @@ def generate_report(data: dict) -> str:
             "offer": fwd.get("offer", "N/A"),
         })
 
+    # --- DBS eSaver ---
+    esaver_current = data.get("esaver", {})
+    esaver_history = _build_esaver_history(esaver_current)
+
     # --- Render ---
     html = REPORT_TEMPLATE.render(
         report_date=now.strftime("%Y-%m-%d"),
@@ -394,6 +452,32 @@ def generate_report(data: dict) -> str:
         fedwatch=fedwatch,
         fedwatch_ranges=fedwatch_ranges,
         hkd_forwards=formatted_forwards,
+        esaver_current=esaver_current,
+        esaver_history=esaver_history,
     )
 
     return html
+
+
+def _build_esaver_history(current: dict) -> list[dict]:
+    """Load eSaver history from CSV and format for the report template."""
+    df = load_csv("esaver_history")
+    if df.empty:
+        return []
+
+    df = df.sort_values("promo_month").reset_index(drop=True)
+    current_month = current.get("promo_month", "")
+
+    rows = []
+    for _, r in df.iterrows():
+        row = {}
+        for col in df.columns:
+            val = r[col]
+            if isinstance(val, float) and math.isnan(val):
+                row[col] = None
+            else:
+                row[col] = val
+        row["is_current"] = (str(row.get("promo_month", "")) == current_month)
+        rows.append(row)
+
+    return rows

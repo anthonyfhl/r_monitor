@@ -19,6 +19,7 @@ from src.fetchers.fred import fetch_fed_funds_rate
 from src.fetchers.treasury import fetch_treasury_yields
 from src.fetchers.ny_fed import fetch_sofr_latest
 from src.fetchers.fedwatch import fetch_fedwatch_probabilities
+from src.fetchers.dbs_esaver import fetch_esaver_current
 from src.storage import append_row, append_rows
 from src.report import generate_report
 from src.telegram_sender import send_report, build_summary
@@ -110,6 +111,14 @@ def fetch_all() -> dict:
         logger.error(f"HKD Forwards fetch failed: {e}")
         data["hkd_forwards"] = []
 
+    logger.info("Fetching DBS eSaver Promotion...")
+    try:
+        data["esaver"] = fetch_esaver_current()
+        logger.info(f"DBS eSaver: {data['esaver']}")
+    except Exception as e:
+        logger.error(f"DBS eSaver fetch failed: {e}")
+        data["esaver"] = {}
+
     return data
 
 
@@ -169,6 +178,39 @@ def store_data(data: dict) -> None:
     if treasury and treasury.get("date"):
         row = {k: v for k, v in treasury.items()}
         append_row("treasury_yields", row)
+
+    # DBS eSaver - upsert by promo_month
+    esaver = data.get("esaver", {})
+    if esaver.get("promo_month"):
+        _upsert_esaver(esaver)
+
+
+def _upsert_esaver(esaver: dict) -> None:
+    """Update or insert an eSaver promotion row by promo_month."""
+    from src.storage import load_csv, save_csv
+    import pandas as pd
+
+    df = load_csv("esaver_history")
+    month = esaver["promo_month"]
+
+    if not df.empty and "promo_month" in df.columns:
+        mask = df["promo_month"].astype(str) == str(month)
+        if mask.any():
+            # Update existing row with any new non-None values
+            idx = df[mask].index[0]
+            for k, v in esaver.items():
+                if v is not None and k in df.columns:
+                    df.at[idx, k] = v
+            save_csv("esaver_history", df)
+            logger.info(f"Updated eSaver row for {month}")
+            return
+
+    # Append new row
+    new_row = pd.DataFrame([esaver])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df = df.sort_values("promo_month").reset_index(drop=True)
+    save_csv("esaver_history", df)
+    logger.info(f"Added new eSaver row for {month}")
 
 
 def main():
