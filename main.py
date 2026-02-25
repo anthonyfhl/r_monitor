@@ -228,23 +228,27 @@ def main():
     logger.info("Step 2: Storing data to CSV...")
     store_data(data)
 
-    # 3. Generate HTML report
-    logger.info("Step 3: Generating HTML report...")
-    html = generate_report(data)
+    # 3. Generate HTML report & send (weekly only — default Sunday)
+    now = datetime.now()
+    weekly = "--weekly" in sys.argv or now.weekday() == 6  # Sunday
+    if weekly:
+        logger.info("Step 3: Generating HTML report (weekly)...")
+        html = generate_report(data)
 
-    # Save report locally
-    report_path = REPORTS_DIR / f"report_{datetime.now().strftime('%Y%m%d')}.html"
-    report_path.write_text(html, encoding="utf-8")
-    logger.info(f"Report saved to {report_path}")
+        report_path = REPORTS_DIR / f"{now.strftime('%Y-%m-%d')}.html"
+        report_path.write_text(html, encoding="utf-8")
+        logger.info(f"Report saved to {report_path}")
 
-    # 4. Send via Telegram
-    logger.info("Step 4: Sending via Telegram...")
-    summary = build_summary(data)
-    ok = send_report(html, summary)
-    if ok:
-        logger.info("Telegram report sent successfully!")
+        # 4. Send via Telegram
+        logger.info("Step 4: Sending via Telegram...")
+        summary = build_summary(data)
+        ok = send_report(html, summary)
+        if ok:
+            logger.info("Telegram report sent successfully!")
+        else:
+            logger.warning("Telegram send had issues — check logs above")
     else:
-        logger.warning("Telegram send had issues — check logs above")
+        logger.info("Step 3: Skipping report (not weekly run day). Use --weekly to force.")
 
     logger.info("Done!")
     return 0
