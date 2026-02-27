@@ -258,7 +258,7 @@ def main():
         logger.info("Step 3: Generating HTML report (weekly)...")
         html = generate_report(data)
 
-        report_path = REPORTS_DIR / f"{now.strftime('%Y-%m-%d')}.html"
+        report_path = REPORTS_DIR / f"r_{now.strftime('%Y-%m-%d')}.html"
         report_path.write_text(html, encoding="utf-8")
         logger.info(f"Report saved to {report_path}")
 
