@@ -21,7 +21,7 @@ from src.fetchers.fedwatch import fetch_fedwatch_probabilities
 from src.fetchers.dbs_esaver import fetch_esaver_current
 from src.storage import append_row, append_rows
 from src.report import generate_report
-from src.telegram_sender import send_report, send_message, build_summary
+from src.telegram_sender import send_message, send_document, build_summary
 from src.health import record_fetch_result, get_alerts, check_staleness
 
 logging.basicConfig(
@@ -265,7 +265,9 @@ def main():
         # 4. Send via Telegram
         logger.info("Step 4: Sending via Telegram...")
         summary = build_summary(data)
-        ok = send_report(html, summary)
+        msg_ok = send_message(summary)
+        doc_ok = send_document(report_path, caption="Interest Rate Monitor Report")
+        ok = msg_ok and doc_ok
         if ok:
             logger.info("Telegram report sent successfully!")
         else:
