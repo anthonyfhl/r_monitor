@@ -2,8 +2,8 @@ name: Daily Interest Rate Report
 
 on:
   schedule:
-    # Run at 04:00 UTC = 12:00 HKT (after HIBOR fixing at 11:00 HKT)
-    - cron: '0 4 * * 1-5'  # Weekdays only (Mon-Fri)
+    # Run at 04:00 UTC = 12:00 HKT (after HIBOR fixing at 11:15 HKT)
+    - cron: '0 4 * * *'  # Every day (including weekends for Sunday report)
   workflow_dispatch:  # Allow manual trigger
 
 permissions:

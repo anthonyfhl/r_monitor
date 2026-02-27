@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 from jinja2 import Template
 
-from src.storage import get_change, load_csv
+from src.storage import get_change, get_recent, load_csv
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,15 @@ def _sparkline_svg(values: list[float], width: int = 80, height: int = 20) -> st
         f'r="2" fill="{color}"/>'
         f"</svg>"
     )
+
+
+def _sparkline_from_csv(csv_name: str, column: str, days: int = 30) -> str:
+    """Generate a sparkline SVG from recent CSV data."""
+    df = get_recent(csv_name, days=days)
+    if df.empty or column not in df.columns:
+        return ""
+    vals = pd.to_numeric(df[column], errors="coerce").dropna().tolist()
+    return _sparkline_svg(vals)
 
 
 def _change_badge(change: float | None) -> str:
@@ -537,7 +546,7 @@ def generate_report(data: dict) -> str:
                 "value": _fmt_rate(val),
                 "change_7d": _change_badge(get_change("hibor_daily", col_name, 7)),
                 "change_30d": _change_badge(get_change("hibor_daily", col_name, 30)),
-                "sparkline": "",
+                "sparkline": _sparkline_from_csv("hibor_daily", col_name),
             })
 
     # HSBC WPL Rate (<1m) = HIBOR 1M + 1.2%
@@ -549,7 +558,7 @@ def generate_report(data: dict) -> str:
             "value": _fmt_rate(wpl_rate),
             "change_7d": _change_badge(get_change("hibor_daily", "1 Month", 7)),
             "change_30d": _change_badge(get_change("hibor_daily", "1 Month", 30)),
-            "sparkline": "",
+            "sparkline": _sparkline_from_csv("hibor_daily", "1 Month"),
         })
 
     # Prime rates — label with 細P / 大P tier
@@ -577,7 +586,7 @@ def generate_report(data: dict) -> str:
             "value": _fmt_rate(ib_hkd["rate"]),
             "change_7d": _change_badge(get_change("ib_rates", "hkd_rate", 7)),
             "change_30d": _change_badge(get_change("ib_rates", "hkd_rate", 30)),
-            "sparkline": "",
+            "sparkline": _sparkline_from_csv("ib_rates", "hkd_rate"),
         })
 
     # --- Build USD rates table ---
@@ -599,7 +608,7 @@ def generate_report(data: dict) -> str:
             "value": _fmt_rate(fed["effective"]),
             "change_7d": _change_badge(get_change("fed_rates", "rate", 7)),
             "change_30d": _change_badge(get_change("fed_rates", "rate", 30)),
-            "sparkline": "",
+            "sparkline": _sparkline_from_csv("fed_rates", "rate"),
         })
 
     # SOFR
@@ -610,7 +619,7 @@ def generate_report(data: dict) -> str:
             "value": _fmt_rate(sofr["rate"]),
             "change_7d": _change_badge(get_change("sofr", "rate", 7)),
             "change_30d": _change_badge(get_change("sofr", "rate", 30)),
-            "sparkline": "",
+            "sparkline": _sparkline_from_csv("sofr", "rate"),
         })
 
     # IB USD
@@ -621,7 +630,7 @@ def generate_report(data: dict) -> str:
             "value": _fmt_rate(ib_usd["rate"]),
             "change_7d": _change_badge(get_change("ib_rates", "usd_rate", 7)),
             "change_30d": _change_badge(get_change("ib_rates", "usd_rate", 30)),
-            "sparkline": "",
+            "sparkline": _sparkline_from_csv("ib_rates", "usd_rate"),
         })
 
     # --- Treasury Yields ---

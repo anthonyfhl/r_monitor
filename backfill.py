@@ -1,20 +1,25 @@
 """One-time historical data backfill script.
 
 Downloads available historical data from free APIs and stores to CSV.
-Run this once when setting up the project.
+Run this once when setting up the project, or to fill gaps.
+
+Usage:
+    python backfill.py              # Backfill all sources (default 2 years)
+    python backfill.py --hibor      # Backfill only HIBOR
+    python backfill.py --days 1825  # Backfill 5 years
 """
 
 import logging
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
-from src.fetchers.hkma import fetch_hibor_history, fetch_hkma_base_rate_history
+import requests
+
 from src.fetchers.fred import fetch_fed_funds_history, fetch_fed_target_history
 from src.fetchers.ny_fed import fetch_sofr_history
 from src.fetchers.treasury import fetch_treasury_history
-from src.storage import append_rows, save_csv, load_csv
-
-import pandas as pd
+from src.storage import append_rows, load_csv
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,33 +28,83 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+HKAB_HIBOR_URL = "https://www.hkab.org.hk/api/hibor"
+HIBOR_TENORS = {
+    "Overnight": "Overnight",
+    "1 Month": "1 Month",
+    "3 Months": "3 Months",
+    "12 Months": "12 Months",
+}
+
 
 def backfill_hibor(days: int = 730):
-    """Backfill HIBOR history (default 2 years)."""
-    logger.info(f"Backfilling HIBOR history ({days} days)...")
-    try:
-        records = fetch_hibor_history(days=days)
-        if records:
-            append_rows("hibor_daily", records)
-            logger.info(f"HIBOR: {len(records)} records fetched")
-        else:
-            logger.warning("No HIBOR history returned")
-    except Exception as e:
-        logger.error(f"HIBOR backfill failed: {e}")
+    """Backfill HIBOR history from HKAB API (single-day queries)."""
+    logger.info(f"Backfilling HIBOR history ({days} days) from HKAB...")
 
+    existing = load_csv("hibor_daily")
+    existing_dates = set()
+    if not existing.empty and "date" in existing.columns:
+        existing_dates = set(existing["date"].astype(str).values)
 
-def backfill_hkma_base_rate():
-    """Backfill full HKMA Base Rate history."""
-    logger.info("Backfilling HKMA Base Rate history...")
-    try:
-        records = fetch_hkma_base_rate_history()
-        if records:
-            append_rows("hkma_base_rate", records)
-            logger.info(f"HKMA Base Rate: {len(records)} records fetched")
-        else:
-            logger.warning("No HKMA Base Rate history returned")
-    except Exception as e:
-        logger.error(f"HKMA Base Rate backfill failed: {e}")
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    records = []
+    skipped = 0
+    fetched = 0
+
+    current = start
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        if date_str in existing_dates:
+            skipped += 1
+            current += timedelta(days=1)
+            continue
+
+        # Skip weekends
+        if current.weekday() >= 5:
+            current += timedelta(days=1)
+            continue
+
+        try:
+            resp = requests.get(
+                HKAB_HIBOR_URL,
+                params={"year": current.year, "month": current.month, "day": current.day},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("isHoliday"):
+                current += timedelta(days=1)
+                continue
+
+            row = {"date": date_str}
+            for hkab_key, display_name in HIBOR_TENORS.items():
+                val = data.get(hkab_key)
+                if val is not None:
+                    row[display_name] = float(val)
+
+            if len(row) > 1:
+                records.append(row)
+                fetched += 1
+
+        except Exception as e:
+            logger.warning(f"HKAB {date_str}: {e}")
+
+        current += timedelta(days=1)
+
+        # Rate limit: ~3 req/sec
+        if fetched % 3 == 0:
+            time.sleep(0.3)
+
+        if fetched % 50 == 0 and fetched > 0:
+            logger.info(f"  HIBOR: fetched {fetched} days so far...")
+
+    if records:
+        append_rows("hibor_daily", records)
+        logger.info(f"HIBOR: {fetched} new records (skipped {skipped} existing)")
+    else:
+        logger.info(f"HIBOR: no new records needed (skipped {skipped} existing)")
 
 
 def backfill_fed_funds(days: int = 730):
@@ -102,20 +157,32 @@ def main():
     logger.info(f"Run time: {datetime.now().isoformat()}")
     logger.info("=" * 60)
 
-    backfill_hibor()
-    backfill_hkma_base_rate()
-    backfill_fed_funds()
-    backfill_sofr()
-    backfill_treasury()
+    args = sys.argv[1:]
+    days = 730
+    if "--days" in args:
+        idx = args.index("--days")
+        days = int(args[idx + 1])
+
+    # Run specific or all
+    targets = [a for a in args if a.startswith("--") and a != "--days"]
+    run_all = not targets
+
+    if run_all or "--hibor" in targets:
+        backfill_hibor(days)
+    if run_all or "--fed" in targets:
+        backfill_fed_funds(days)
+    if run_all or "--sofr" in targets:
+        backfill_sofr(days)
+    if run_all or "--treasury" in targets:
+        backfill_treasury()
 
     logger.info("=" * 60)
     logger.info("Backfill complete!")
 
-    # Print summary
-    for name in ["hibor_daily", "hkma_base_rate", "fed_rates", "sofr", "treasury_yields"]:
+    for name in ["hibor_daily", "fed_rates", "sofr", "treasury_yields", "prime_rates", "ib_rates"]:
         df = load_csv(name)
         if not df.empty:
-            logger.info(f"  {name}: {len(df)} rows, date range: {df['date'].min()} to {df['date'].max()}")
+            logger.info(f"  {name}: {len(df)} rows, {df['date'].min()} to {df['date'].max()}")
         else:
             logger.info(f"  {name}: empty")
 
