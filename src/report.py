@@ -340,7 +340,7 @@ REPORT_TEMPLATE = Template("""\
       {% endfor %}
     </tbody>
   </table>
-  <p class="source">Sources: HKMA, HSBC, DBS, Interactive Brokers</p>
+  <p class="source">Sources: HKAB, HSBC, DBS, Interactive Brokers</p>
   {% if hkd_chart %}
   <div style="margin-top:12px">
     <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Historical HKD Rates</div>
@@ -512,7 +512,6 @@ def generate_report(data: dict) -> str:
     Args:
         data: dict with keys:
             - hibor: dict of latest HIBOR rates
-            - hkma_base_rate: dict with rate
             - prime_rates: list of bank prime rate dicts
             - ib_rates: dict with HKD/USD margin rates
             - fed_funds: dict with effective/target rates
@@ -525,17 +524,6 @@ def generate_report(data: dict) -> str:
 
     # --- Build HKD rates table ---
     hkd_rates = []
-
-    # HKMA Base Rate
-    base = data.get("hkma_base_rate", {})
-    if base.get("rate") is not None:
-        hkd_rates.append({
-            "name": "HKMA Base Rate",
-            "value": _fmt_rate(base["rate"]),
-            "change_7d": _change_badge(None),  # Step function, no daily change
-            "change_30d": _change_badge(None),
-            "sparkline": "",
-        })
 
     # HIBOR tenors
     hibor = data.get("hibor", {})
@@ -551,6 +539,18 @@ def generate_report(data: dict) -> str:
                 "change_30d": _change_badge(get_change("hibor_daily", col_name, 30)),
                 "sparkline": "",
             })
+
+    # HSBC WPL Rate (<1m) = HIBOR 1M + 1.2%
+    hibor_1m = hibor.get("1 Month")
+    if hibor_1m is not None:
+        wpl_rate = hibor_1m + 1.2
+        hkd_rates.append({
+            "name": "HSBC WPL Rate (&lt;1m)",
+            "value": _fmt_rate(wpl_rate),
+            "change_7d": _change_badge(get_change("hibor_daily", "1 Month", 7)),
+            "change_30d": _change_badge(get_change("hibor_daily", "1 Month", 30)),
+            "sparkline": "",
+        })
 
     # Prime rates — label with 細P / 大P tier
     _prime_labels = {

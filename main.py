@@ -10,7 +10,6 @@ from datetime import datetime
 from src.config import DATA_DIR, REPORTS_DIR
 from src.fetchers.hkma import (
     fetch_hibor_latest,
-    fetch_hkma_base_rate,
     fetch_hkd_forward_rates,
 )
 from src.fetchers.banks import fetch_all_prime_rates
@@ -44,14 +43,6 @@ def fetch_all() -> dict:
     except Exception as e:
         logger.error(f"HIBOR fetch failed: {e}")
         data["hibor"] = {}
-
-    logger.info("Fetching HKMA Base Rate...")
-    try:
-        data["hkma_base_rate"] = fetch_hkma_base_rate()
-        logger.info(f"HKMA Base Rate: {data['hkma_base_rate']}")
-    except Exception as e:
-        logger.error(f"HKMA Base Rate fetch failed: {e}")
-        data["hkma_base_rate"] = {}
 
     logger.info("Fetching bank Prime Rates...")
     try:
@@ -132,11 +123,6 @@ def store_data(data: dict) -> None:
         row = {"date": hibor.get("date", today)}
         row.update({k: v for k, v in hibor.items() if k != "date"})
         append_row("hibor_daily", row)
-
-    # HKMA Base Rate
-    base = data.get("hkma_base_rate", {})
-    if base.get("rate") is not None:
-        append_row("hkma_base_rate", {"date": base.get("date", today), "rate": base["rate"]})
 
     # Prime Rates
     prime_rates = data.get("prime_rates", [])
