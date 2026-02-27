@@ -21,7 +21,8 @@ from src.fetchers.fedwatch import fetch_fedwatch_probabilities
 from src.fetchers.dbs_esaver import fetch_esaver_current
 from src.storage import append_row, append_rows
 from src.report import generate_report
-from src.telegram_sender import send_report, build_summary
+from src.telegram_sender import send_report, send_message, build_summary
+from src.health import record_fetch_result, get_alerts, check_staleness
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,75 +41,93 @@ def fetch_all() -> dict:
     try:
         data["hibor"] = fetch_hibor_latest()
         logger.info(f"HIBOR: {data['hibor']}")
+        record_fetch_result("hibor", True)
     except Exception as e:
         logger.error(f"HIBOR fetch failed: {e}")
         data["hibor"] = {}
+        record_fetch_result("hibor", False)
 
     logger.info("Fetching bank Prime Rates...")
     try:
         data["prime_rates"] = fetch_all_prime_rates()
         logger.info(f"Prime Rates: {data['prime_rates']}")
+        record_fetch_result("prime_rates", True)
     except Exception as e:
         logger.error(f"Prime Rates fetch failed: {e}")
         data["prime_rates"] = []
+        record_fetch_result("prime_rates", False)
 
     logger.info("Fetching IB Margin Rates...")
     try:
         data["ib_rates"] = fetch_ib_margin_rates()
         logger.info(f"IB Rates: {data['ib_rates']}")
+        record_fetch_result("ib_rates", True)
     except Exception as e:
         logger.error(f"IB Rates fetch failed: {e}")
         data["ib_rates"] = {}
+        record_fetch_result("ib_rates", False)
 
     # --- USD Rates ---
     logger.info("Fetching Fed Funds Rate...")
     try:
         data["fed_funds"] = fetch_fed_funds_rate()
         logger.info(f"Fed Funds: {data['fed_funds']}")
+        record_fetch_result("fed_funds", True)
     except Exception as e:
         logger.error(f"Fed Funds fetch failed: {e}")
         data["fed_funds"] = {}
+        record_fetch_result("fed_funds", False)
 
     logger.info("Fetching SOFR...")
     try:
         data["sofr"] = fetch_sofr_latest()
         logger.info(f"SOFR: {data['sofr']}")
+        record_fetch_result("sofr", True)
     except Exception as e:
         logger.error(f"SOFR fetch failed: {e}")
         data["sofr"] = {}
+        record_fetch_result("sofr", False)
 
     logger.info("Fetching Treasury Yields...")
     try:
         data["treasury"] = fetch_treasury_yields()
         logger.info(f"Treasury: {len(data['treasury'])} maturities")
+        record_fetch_result("treasury", True)
     except Exception as e:
         logger.error(f"Treasury fetch failed: {e}")
         data["treasury"] = {}
+        record_fetch_result("treasury", False)
 
     # --- Forecasts ---
     logger.info("Fetching FedWatch Probabilities...")
     try:
         data["fedwatch"] = fetch_fedwatch_probabilities()
         logger.info(f"FedWatch: {len(data['fedwatch'])} meetings")
+        record_fetch_result("fedwatch", True)
     except Exception as e:
         logger.error(f"FedWatch fetch failed: {e}")
         data["fedwatch"] = []
+        record_fetch_result("fedwatch", False)
 
     logger.info("Fetching HKD Forward Rates...")
     try:
         data["hkd_forwards"] = fetch_hkd_forward_rates()
         logger.info(f"HKD Forwards: {len(data['hkd_forwards'])} tenors")
+        record_fetch_result("hkd_forwards", True)
     except Exception as e:
         logger.error(f"HKD Forwards fetch failed: {e}")
         data["hkd_forwards"] = []
+        record_fetch_result("hkd_forwards", False)
 
     logger.info("Fetching DBS eSaver Promotion...")
     try:
         data["esaver"] = fetch_esaver_current()
         logger.info(f"DBS eSaver: {data['esaver']}")
+        record_fetch_result("esaver", True)
     except Exception as e:
         logger.error(f"DBS eSaver fetch failed: {e}")
         data["esaver"] = {}
+        record_fetch_result("esaver", False)
 
     return data
 
@@ -209,6 +228,24 @@ def main():
     # 1. Fetch all data
     logger.info("Step 1: Fetching rates from all sources...")
     data = fetch_all()
+
+    # 1b. Check for persistent fetch failures
+    alerts = get_alerts(threshold=3)
+    if alerts:
+        alert_msg = "\u26a0\ufe0f <b>Fetch Alert</b>\n\nThe following sources have failed 3+ consecutive days:\n"
+        for src in alerts:
+            alert_msg += f"  \u2022 {src}\n"
+        logger.warning(f"Fetch alerts: {alerts}")
+        send_message(alert_msg)
+
+    # 1c. Check for stale data
+    stale = check_staleness(threshold_days=3)
+    if stale:
+        stale_msg = "\u26a0\ufe0f <b>Stale Data Warning</b>\n\n"
+        for name, last_date, gap in stale:
+            stale_msg += f"  \u2022 {name}: last update {last_date} ({gap}d ago)\n"
+        logger.warning(f"Stale data: {stale}")
+        send_message(stale_msg)
 
     # 2. Store to CSV
     logger.info("Step 2: Storing data to CSV...")

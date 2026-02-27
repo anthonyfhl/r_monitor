@@ -38,6 +38,9 @@ temp_pdfs/
 # Claude Code
 .claude/
 
+# Health tracking (transient state)
+data/fetch_health.json
+
 # Logs
 logs/
 

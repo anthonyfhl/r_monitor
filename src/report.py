@@ -3,11 +3,14 @@
 import logging
 import math
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 from jinja2 import Template
 
 from src.storage import get_change, get_recent, load_csv
+
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 logger = logging.getLogger(__name__)
 
@@ -66,57 +69,40 @@ def _fmt_rate(val) -> str:
         return str(val)
 
 
-def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
-    """Build an inline SVG multi-series line chart of HKD rates over time.
+def _build_multi_series_chart_svg(
+    series_defs: list[tuple[str, str, str, str, bool]],
+    width: int = 860,
+    height: int = 320,
+) -> str:
+    """Build an inline SVG multi-series line chart.
 
-    Series: HIBOR O/N, 1M, 3M, 12M + 細P + 大P + IB HKD
-    Uses data from hibor_daily.csv, prime_rates.csv, ib_rates.csv
+    Args:
+        series_defs: list of (label, color, csv_name, column, is_step) tuples.
+            is_step=True draws horizontal-then-vertical step lines.
+        width: SVG width in pixels.
+        height: SVG height in pixels.
+
+    Returns:
+        SVG string, or "" if no data.
     """
     pad_left, pad_right, pad_top, pad_bottom = 55, 20, 20, 40
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
 
     # --- Load data ---
-    hibor_df = load_csv("hibor_daily")
-    if hibor_df.empty or "date" not in hibor_df.columns:
+    csv_names = list({s[2] for s in series_defs})
+    dfs = {}
+    for name in csv_names:
+        df = load_csv(name)
+        if not df.empty and "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date")
+            dfs[name] = df
+
+    if not dfs:
         return ""
 
-    hibor_df["date"] = pd.to_datetime(hibor_df["date"])
-    hibor_df = hibor_df.sort_values("date")
-
-    # Series config: (label, color, csv_name, column, step)
-    # step=True draws horizontal-then-vertical step lines (for rates that jump)
-    series_defs = [
-        ("HIBOR O/N", "#60a5fa", "hibor_daily", "Overnight", False),
-        ("HIBOR 1M", "#38bdf8", "hibor_daily", "1 Month", False),
-        ("HIBOR 3M", "#22d3ee", "hibor_daily", "3 Months", False),
-        ("HIBOR 12M", "#a78bfa", "hibor_daily", "12 Months", False),
-    ]
-
-    # Also load prime rates & IB rates if available
-    prime_df = load_csv("prime_rates")
-    if not prime_df.empty and "date" in prime_df.columns:
-        prime_df["date"] = pd.to_datetime(prime_df["date"])
-        prime_df = prime_df.sort_values("date")
-        if "HSBC" in prime_df.columns:
-            series_defs.append(("細P (HSBC)", "#f97316", "prime_rates", "HSBC", True))
-        if "DBS" in prime_df.columns:
-            series_defs.append(("大P (DBS)", "#ef4444", "prime_rates", "DBS", True))
-
-    ib_df = load_csv("ib_rates")
-    if not ib_df.empty and "date" in ib_df.columns:
-        ib_df["date"] = pd.to_datetime(ib_df["date"])
-        ib_df = ib_df.sort_values("date")
-        if "hkd_rate" in ib_df.columns:
-            series_defs.append(("IB HKD", "#fbbf24", "ib_rates", "hkd_rate", False))
-
     # --- Determine global date/rate range ---
-    dfs = {"hibor_daily": hibor_df}
-    if not prime_df.empty:
-        dfs["prime_rates"] = prime_df
-    if not ib_df.empty:
-        dfs["ib_rates"] = ib_df
-
     all_dates = []
     all_vals = []
     for label, color, csv_name, col, step in series_defs:
@@ -160,7 +146,6 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
     ]
 
     # Grid lines and Y-axis labels
-    # Nice round tick values
     tick_step = 0.5
     if val_range > 4:
         tick_step = 1.0
@@ -194,7 +179,7 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
             f'<text x="{xp:.1f}" y="{height - pad_bottom + 15}" text-anchor="middle" '
             f'fill="#64748b" font-size="10">{year}</text>'
         )
-    # Also add mid-year markers
+    # Mid-year markers
     for year in range(date_min.year, date_max.year + 2):
         dt = pd.Timestamp(f"{year}-07-01")
         if dt < date_min or dt > date_max:
@@ -218,26 +203,20 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
             continue
 
         if is_step:
-            # Step-function series: horizontal then vertical at each change
-            # Extend the last known value to today for a complete picture
             points = []
             rows = list(s.itertuples(index=False))
             for i, row in enumerate(rows):
                 dt, val = row[0], row[1]
                 if i > 0:
-                    # Horizontal line from previous y to this x
                     prev_val = rows[i - 1][1]
                     points.append(f"{x_pos(dt):.1f},{y_pos(prev_val):.1f}")
-                # Vertical line to new y
                 points.append(f"{x_pos(dt):.1f},{y_pos(val):.1f}")
-            # Extend last value to today (or date_max)
             if rows:
                 last_val = rows[-1][1]
                 end_dt = min(today, date_max)
                 if end_dt > rows[-1][0]:
                     points.append(f"{x_pos(end_dt):.1f},{y_pos(last_val):.1f}")
         else:
-            # Continuous series — downsample if too many points
             if len(s) > 500:
                 ds_step = len(s) // 400
                 s = s.iloc[::ds_step]
@@ -256,7 +235,7 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
             )
             legend_items.append((label, color))
 
-    # Legend (bottom-right)
+    # Legend (top-left)
     leg_x = pad_left + 10
     leg_y = pad_top + 5
     for i, (label, color) in enumerate(legend_items):
@@ -274,245 +253,156 @@ def _build_hkd_chart_svg(width: int = 860, height: int = 320) -> str:
     return "\n".join(svg_parts)
 
 
-REPORT_TEMPLATE = Template("""\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Interest Rate Monitor - {{ report_date }}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-    background: #0f172a; color: #e2e8f0; padding: 16px; font-size: 14px;
-    max-width: 900px; margin: 0 auto;
-  }
-  h1 { font-size: 20px; color: #f8fafc; margin-bottom: 4px; }
-  .subtitle { color: #94a3b8; font-size: 12px; margin-bottom: 16px; }
-  .section { margin-bottom: 20px; }
-  .section-title {
-    font-size: 15px; font-weight: 700; color: #38bdf8;
-    border-bottom: 1px solid #1e293b; padding-bottom: 6px; margin-bottom: 10px;
-  }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-  th {
-    background: #1e293b; color: #94a3b8; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 8px 10px; text-align: left; border-bottom: 1px solid #334155;
-  }
-  td {
-    padding: 7px 10px; border-bottom: 1px solid #1e293b; font-size: 13px;
-    white-space: nowrap;
-  }
-  tr:hover { background: #1e293b; }
-  .rate-name { color: #e2e8f0; font-weight: 500; }
-  .rate-value { color: #f8fafc; font-weight: 700; font-family: 'SF Mono', 'Fira Code', monospace; }
-  .source { color: #64748b; font-size: 11px; }
-  .footer { color: #475569; font-size: 11px; margin-top: 16px; text-align: center; }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
-  .forecast-table td { font-size: 12px; }
-  .prob-bar {
-    display: inline-block; height: 14px; border-radius: 2px;
-    background: #38bdf8; min-width: 2px; vertical-align: middle;
-  }
-  .highlight { background: #1e3a5f; }
-  .current-row { background: #1e3a5f; border-left: 3px solid #38bdf8; }
-  .na { color: #64748b; }
-  .esaver-table td { font-size: 12px; padding: 5px 8px; }
-  .esaver-table th { font-size: 10px; padding: 6px 8px; }
-  .note-cell { white-space: normal; max-width: 120px; font-size: 11px; color: #94a3b8; }
-</style>
-</head>
-<body>
+def _build_yield_curve_svg(treasury: dict, width: int = 500, height: int = 200) -> str:
+    """Build an inline SVG of the current Treasury yield curve shape.
 
-<h1>&#128200; Interest Rate Monitor</h1>
-<p class="subtitle">Report generated: {{ report_date }} {{ report_time }} HKT</p>
+    Plots yield (Y) against maturity (X, log scale) for a single point in time.
+    """
+    maturities = [
+        ("1 Mo", 1), ("2 Mo", 2), ("3 Mo", 3), ("6 Mo", 6), ("1 Yr", 12),
+        ("2 Yr", 24), ("3 Yr", 36), ("5 Yr", 60), ("7 Yr", 84),
+        ("10 Yr", 120), ("20 Yr", 240), ("30 Yr", 360),
+    ]
 
-{# ===== HKD RATES ===== #}
-<div class="section">
-  <div class="section-title">&#127469;&#127472; HKD Interest Rates</div>
-  <table>
-    <thead>
-      <tr><th>Rate</th><th>Current</th><th>7d Change</th><th>30d Change</th><th>Trend</th></tr>
-    </thead>
-    <tbody>
-      {% for row in hkd_rates %}
-      <tr>
-        <td class="rate-name">{{ row.name }}</td>
-        <td class="rate-value">{{ row.value }}</td>
-        <td>{{ row.change_7d }}</td>
-        <td>{{ row.change_30d }}</td>
-        <td>{{ row.sparkline }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Sources: HKAB, HSBC, DBS, Interactive Brokers</p>
-  {% if hkd_chart %}
-  <div style="margin-top:12px">
-    <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Historical HKD Rates</div>
-    {{ hkd_chart }}
-  </div>
-  {% endif %}
-</div>
+    # Filter to available data points
+    points_data = []
+    for label, months in maturities:
+        val = treasury.get(label)
+        if val is not None:
+            try:
+                points_data.append((label, months, float(val)))
+            except (ValueError, TypeError):
+                pass
 
-{# ===== USD RATES ===== #}
-<div class="section">
-  <div class="section-title">&#127482;&#127480; USD Interest Rates</div>
-  <table>
-    <thead>
-      <tr><th>Rate</th><th>Current</th><th>7d Change</th><th>30d Change</th><th>Trend</th></tr>
-    </thead>
-    <tbody>
-      {% for row in usd_rates %}
-      <tr>
-        <td class="rate-name">{{ row.name }}</td>
-        <td class="rate-value">{{ row.value }}</td>
-        <td>{{ row.change_7d }}</td>
-        <td>{{ row.change_30d }}</td>
-        <td>{{ row.sparkline }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Sources: Federal Reserve (FRED), NY Fed, US Treasury, Interactive Brokers</p>
-</div>
+    if len(points_data) < 3:
+        return ""
 
-{# ===== DBS eSAVER PROMOTIONS ===== #}
-{% if esaver_history %}
-<div class="section">
-  <div class="section-title">&#128179; DBS e$aver Savings Promotion (Existing Customers)</div>
-  {% if esaver_current %}
-  <p style="color:#94a3b8;font-size:12px;margin-bottom:8px;">
-    Current: <b style="color:#38bdf8">{{ esaver_current.promo_month or 'N/A' }}</b>
-    &mdash; Register by {{ esaver_current.reg_end or '?' }}
-    &mdash; Reward until {{ esaver_current.reward_end or '?' }}
-    &mdash; Min HK${{ "{:,.0f}".format(esaver_current.min_hkd) if esaver_current.min_hkd else 'N/A' }}
-    / US${{ "{:,.0f}".format(esaver_current.min_usd) if esaver_current.min_usd else 'N/A' }}
-  </p>
-  {% endif %}
-  <table class="esaver-table">
-    <thead>
-      <tr>
-        <th>Month</th>
-        <th>HKD e$aver</th>
-        <th>USD e$aver</th>
-        <th>Total HKD</th><th>Total USD</th>
-        <th>Level-Up</th>
-        <th>Excludes</th>
-        <th>Reg End</th><th>Reward End</th>
-        <th>Notes</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in esaver_history %}
-      <tr{% if row.is_current %} class="current-row"{% endif %}>
-        <td class="rate-name">{{ row.promo_month }}</td>
-        <td class="rate-value">{% if row.hkd_esaver_rate %}{{ "%.3f"|format(row.hkd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
-        <td class="rate-value">{% if row.usd_esaver_rate %}{{ "%.3f"|format(row.usd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
-        <td class="rate-value" style="color:#22c55e">{% if row.max_total_hkd %}{{ "%.2f"|format(row.max_total_hkd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
-        <td class="rate-value" style="color:#22c55e">{% if row.max_total_usd %}{{ "%.2f"|format(row.max_total_usd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
-        <td>{% if row.has_levelup == 'yes' %}<span style="color:#fbbf24">Yes</span>{% else %}<span class="na">No</span>{% endif %}</td>
-        <td class="note-cell">{{ row.excludes or '' }}</td>
-        <td style="font-size:11px">{{ row.reg_end or '' }}</td>
-        <td style="font-size:11px">{{ row.reward_end or '' }}</td>
-        <td class="note-cell">{{ row.notes or '' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Source: DBS Bank (Hong Kong) &mdash; T&amp;Cs for Existing Customers</p>
-</div>
-{% endif %}
+    pad_left, pad_right, pad_top, pad_bottom = 45, 20, 15, 30
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
 
-{# ===== US TREASURY YIELD CURVE ===== #}
-{% if treasury_yields %}
-<div class="section">
-  <div class="section-title">&#127974; US Treasury Yield Curve</div>
-  <table>
-    <thead>
-      <tr><th>Maturity</th><th>Yield</th><th>7d Change</th></tr>
-    </thead>
-    <tbody>
-      {% for row in treasury_yields %}
-      <tr>
-        <td class="rate-name">{{ row.maturity }}</td>
-        <td class="rate-value">{{ row.value }}</td>
-        <td>{{ row.change_7d }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Source: US Department of the Treasury</p>
-</div>
-{% endif %}
+    # Log scale for maturity
+    import math as _math
+    log_min = _math.log(points_data[0][1])
+    log_max = _math.log(points_data[-1][1])
+    log_range = log_max - log_min
 
-{# ===== RATE FORECASTS ===== #}
-<div class="section">
-  <div class="section-title">&#128302; Market Rate Expectations</div>
+    vals = [p[2] for p in points_data]
+    val_min = min(vals) - 0.15
+    val_max = max(vals) + 0.15
+    val_range = val_max - val_min
+    if val_range == 0:
+        val_range = 1
 
-  {% if fedwatch %}
-  <h4 style="color:#94a3b8;font-size:12px;margin-bottom:6px;">FedWatch - FOMC Meeting Rate Probabilities</h4>
-  <table class="forecast-table">
-    <thead>
-      <tr>
-        <th>Meeting</th>
-        {% for rate_range in fedwatch_ranges %}
-        <th>{{ rate_range }}</th>
-        {% endfor %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for meeting in fedwatch %}
-      <tr>
-        <td class="rate-name">{{ meeting.meeting }}</td>
-        {% for rate_range in fedwatch_ranges %}
-        <td>
-          {% if meeting.probabilities.get(rate_range) %}
-          <span class="prob-bar" style="width:{{ meeting.probabilities[rate_range] * 0.6 }}px"></span>
-          {{ "%.1f"|format(meeting.probabilities[rate_range]) }}%
-          {% else %}—{% endif %}
-        </td>
-        {% endfor %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Source: Investing.com Fed Rate Monitor (based on Fed Funds Futures)</p>
-  {% else %}
-  <p style="color:#94a3b8;font-size:12px;">FedWatch data unavailable.</p>
-  {% endif %}
+    def x_pos(months):
+        return pad_left + ((_math.log(months) - log_min) / log_range) * plot_w
 
-  {% if hkd_forwards %}
-  <h4 style="color:#94a3b8;font-size:12px;margin:12px 0 6px;">HKD Forward Points (Implied Future Rates)</h4>
-  <table class="forecast-table">
-    <thead>
-      <tr><th>Tenor</th><th>Bid</th><th>Offer</th></tr>
-    </thead>
-    <tbody>
-      {% for row in hkd_forwards %}
-      <tr>
-        <td class="rate-name">{{ row.tenor }}</td>
-        <td class="rate-value">{{ row.bid }}</td>
-        <td class="rate-value">{{ row.offer }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p class="source">Source: HKMA (HKD Forward Exchange Rates)</p>
-  {% endif %}
-</div>
+    def y_pos(v):
+        return pad_top + plot_h - ((v - val_min) / val_range) * plot_h
 
-<div class="footer">
-  r_monitor &mdash; Automated Interest Rate Tracker<br>
-  Data may be delayed. Not financial advice.
-</div>
+    svg = [
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="background:#0f172a;border-radius:8px">'
+    ]
 
-</body>
-</html>
-""")
+    # Y-axis grid
+    tick_step = 0.25 if val_range < 2 else 0.5
+    y_tick = math.ceil(val_min / tick_step) * tick_step
+    while y_tick <= val_max:
+        yp = y_pos(y_tick)
+        svg.append(
+            f'<line x1="{pad_left}" y1="{yp:.1f}" x2="{width - pad_right}" y2="{yp:.1f}" '
+            f'stroke="#1e293b" stroke-width="1"/>'
+        )
+        svg.append(
+            f'<text x="{pad_left - 4}" y="{yp + 4:.1f}" text-anchor="end" '
+            f'fill="#64748b" font-size="9">{y_tick:.2f}%</text>'
+        )
+        y_tick += tick_step
+
+    # X-axis labels (selected tenors only)
+    x_labels = ["3 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"]
+    for label, months, _ in points_data:
+        if label in x_labels:
+            xp = x_pos(months)
+            svg.append(
+                f'<text x="{xp:.1f}" y="{height - pad_bottom + 14}" text-anchor="middle" '
+                f'fill="#64748b" font-size="9">{label}</text>'
+            )
+
+    # Polyline
+    poly_points = []
+    for label, months, val in points_data:
+        poly_points.append(f"{x_pos(months):.1f},{y_pos(val):.1f}")
+    svg.append(
+        f'<polyline points="{" ".join(poly_points)}" fill="none" '
+        f'stroke="#22d3ee" stroke-width="2" opacity="0.9"/>'
+    )
+
+    # Dot markers + value labels
+    for label, months, val in points_data:
+        xp = x_pos(months)
+        yp = y_pos(val)
+        svg.append(
+            f'<circle cx="{xp:.1f}" cy="{yp:.1f}" r="3" fill="#22d3ee"/>'
+        )
+        # Value label above the dot
+        svg.append(
+            f'<text x="{xp:.1f}" y="{yp - 6:.1f}" text-anchor="middle" '
+            f'fill="#94a3b8" font-size="8">{val:.2f}</text>'
+        )
+
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+
+def _build_hkd_chart_svg() -> str:
+    """Build HKD rates chart (HIBOR, Prime, IB HKD)."""
+    series = [
+        ("HIBOR O/N", "#60a5fa", "hibor_daily", "Overnight", False),
+        ("HIBOR 1M", "#38bdf8", "hibor_daily", "1 Month", False),
+        ("HIBOR 3M", "#22d3ee", "hibor_daily", "3 Months", False),
+        ("HIBOR 12M", "#a78bfa", "hibor_daily", "12 Months", False),
+    ]
+
+    # Conditionally add Prime rates and IB HKD
+    prime_df = load_csv("prime_rates")
+    if not prime_df.empty and "date" in prime_df.columns:
+        if "HSBC" in prime_df.columns:
+            series.append(("細P (HSBC)", "#f97316", "prime_rates", "HSBC", True))
+        if "DBS" in prime_df.columns:
+            series.append(("大P (DBS)", "#ef4444", "prime_rates", "DBS", True))
+
+    ib_df = load_csv("ib_rates")
+    if not ib_df.empty and "hkd_rate" in ib_df.columns:
+        series.append(("IB HKD", "#fbbf24", "ib_rates", "hkd_rate", False))
+
+    return _build_multi_series_chart_svg(series)
+
+
+def _build_usd_chart_svg() -> str:
+    """Build USD rates chart (Fed Funds, SOFR, IB USD, Treasury 2Y/10Y)."""
+    series = [
+        ("Fed Funds", "#ef4444", "fed_rates", "rate", True),
+        ("SOFR", "#22d3ee", "sofr", "rate", False),
+        ("Treasury 2Y", "#a78bfa", "treasury_yields", "2 Yr", False),
+        ("Treasury 10Y", "#38bdf8", "treasury_yields", "10 Yr", False),
+    ]
+
+    ib_df = load_csv("ib_rates")
+    if not ib_df.empty and "usd_rate" in ib_df.columns:
+        series.append(("IB USD", "#fbbf24", "ib_rates", "usd_rate", False))
+
+    return _build_multi_series_chart_svg(series)
+
+
+def _load_template() -> Template:
+    """Load the Jinja2 report template from the templates directory."""
+    template_path = _TEMPLATE_DIR / "report.html"
+    return Template(template_path.read_text(encoding="utf-8"))
+
+
+REPORT_TEMPLATE = _load_template()
 
 
 def generate_report(data: dict) -> str:
@@ -670,8 +560,10 @@ def generate_report(data: dict) -> str:
     esaver_current = data.get("esaver", {})
     esaver_history = _build_esaver_history(esaver_current)
 
-    # --- HKD Chart ---
+    # --- Charts ---
     hkd_chart = _build_hkd_chart_svg()
+    usd_chart = _build_usd_chart_svg()
+    yield_curve_chart = _build_yield_curve_svg(treasury)
 
     # --- Render ---
     html = REPORT_TEMPLATE.render(
@@ -680,6 +572,8 @@ def generate_report(data: dict) -> str:
         hkd_rates=hkd_rates,
         usd_rates=usd_rates,
         hkd_chart=hkd_chart,
+        usd_chart=usd_chart,
+        yield_curve_chart=yield_curve_chart,
         treasury_yields=treasury_yields,
         fedwatch=fedwatch,
         fedwatch_ranges=fedwatch_ranges,

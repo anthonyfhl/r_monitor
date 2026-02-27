@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interest Rate Monitor - {{ report_date }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    background: #0f172a; color: #e2e8f0; padding: 16px; font-size: 14px;
+    max-width: 900px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; color: #f8fafc; margin-bottom: 4px; }
+  .subtitle { color: #94a3b8; font-size: 12px; margin-bottom: 16px; }
+  .section { margin-bottom: 20px; }
+  .section-title {
+    font-size: 15px; font-weight: 700; color: #38bdf8;
+    border-bottom: 1px solid #1e293b; padding-bottom: 6px; margin-bottom: 10px;
+  }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  th {
+    background: #1e293b; color: #94a3b8; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 8px 10px; text-align: left; border-bottom: 1px solid #334155;
+  }
+  td {
+    padding: 7px 10px; border-bottom: 1px solid #1e293b; font-size: 13px;
+    white-space: nowrap;
+  }
+  tr:hover { background: #1e293b; }
+  .rate-name { color: #e2e8f0; font-weight: 500; }
+  .rate-value { color: #f8fafc; font-weight: 700; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .source { color: #64748b; font-size: 11px; }
+  .footer { color: #475569; font-size: 11px; margin-top: 16px; text-align: center; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+  .forecast-table td { font-size: 12px; }
+  .prob-bar {
+    display: inline-block; height: 14px; border-radius: 2px;
+    background: #38bdf8; min-width: 2px; vertical-align: middle;
+  }
+  .highlight { background: #1e3a5f; }
+  .current-row { background: #1e3a5f; border-left: 3px solid #38bdf8; }
+  .na { color: #64748b; }
+  .esaver-table td { font-size: 12px; padding: 5px 8px; }
+  .esaver-table th { font-size: 10px; padding: 6px 8px; }
+  .note-cell { white-space: normal; max-width: 120px; font-size: 11px; color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<h1>&#128200; Interest Rate Monitor</h1>
+<p class="subtitle">Report generated: {{ report_date }} {{ report_time }} HKT</p>
+
+{# ===== HKD RATES ===== #}
+<div class="section">
+  <div class="section-title">&#127469;&#127472; HKD Interest Rates</div>
+  <table>
+    <thead>
+      <tr><th>Rate</th><th>Current</th><th>7d Change</th><th>30d Change</th><th>Trend</th></tr>
+    </thead>
+    <tbody>
+      {% for row in hkd_rates %}
+      <tr>
+        <td class="rate-name">{{ row.name }}</td>
+        <td class="rate-value">{{ row.value }}</td>
+        <td>{{ row.change_7d }}</td>
+        <td>{{ row.change_30d }}</td>
+        <td>{{ row.sparkline }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Sources: HKAB, HSBC, DBS, Interactive Brokers</p>
+  {% if hkd_chart %}
+  <div style="margin-top:12px">
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Historical HKD Rates</div>
+    {{ hkd_chart }}
+  </div>
+  {% endif %}
+</div>
+
+{# ===== USD RATES ===== #}
+<div class="section">
+  <div class="section-title">&#127482;&#127480; USD Interest Rates</div>
+  <table>
+    <thead>
+      <tr><th>Rate</th><th>Current</th><th>7d Change</th><th>30d Change</th><th>Trend</th></tr>
+    </thead>
+    <tbody>
+      {% for row in usd_rates %}
+      <tr>
+        <td class="rate-name">{{ row.name }}</td>
+        <td class="rate-value">{{ row.value }}</td>
+        <td>{{ row.change_7d }}</td>
+        <td>{{ row.change_30d }}</td>
+        <td>{{ row.sparkline }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Sources: Federal Reserve (FRED), NY Fed, US Treasury, Interactive Brokers</p>
+  {% if usd_chart %}
+  <div style="margin-top:12px">
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Historical USD Rates</div>
+    {{ usd_chart }}
+  </div>
+  {% endif %}
+</div>
+
+{# ===== DBS eSAVER PROMOTIONS ===== #}
+{% if esaver_history %}
+<div class="section">
+  <div class="section-title">&#128179; DBS e$aver Savings Promotion (Existing Customers)</div>
+  {% if esaver_current %}
+  <p style="color:#94a3b8;font-size:12px;margin-bottom:8px;">
+    Current: <b style="color:#38bdf8">{{ esaver_current.promo_month or 'N/A' }}</b>
+    &mdash; Register by {{ esaver_current.reg_end or '?' }}
+    &mdash; Reward until {{ esaver_current.reward_end or '?' }}
+    &mdash; Min HK${{ "{:,.0f}".format(esaver_current.min_hkd) if esaver_current.min_hkd else 'N/A' }}
+    / US${{ "{:,.0f}".format(esaver_current.min_usd) if esaver_current.min_usd else 'N/A' }}
+  </p>
+  {% endif %}
+  <table class="esaver-table">
+    <thead>
+      <tr>
+        <th>Month</th>
+        <th>HKD e$aver</th>
+        <th>USD e$aver</th>
+        <th>Total HKD</th><th>Total USD</th>
+        <th>Level-Up</th>
+        <th>Excludes</th>
+        <th>Reg End</th><th>Reward End</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in esaver_history %}
+      <tr{% if row.is_current %} class="current-row"{% endif %}>
+        <td class="rate-name">{{ row.promo_month }}</td>
+        <td class="rate-value">{% if row.hkd_esaver_rate %}{{ "%.3f"|format(row.hkd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value">{% if row.usd_esaver_rate %}{{ "%.3f"|format(row.usd_esaver_rate) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value" style="color:#22c55e">{% if row.max_total_hkd %}{{ "%.2f"|format(row.max_total_hkd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td class="rate-value" style="color:#22c55e">{% if row.max_total_usd %}{{ "%.2f"|format(row.max_total_usd) }}%{% else %}<span class="na">N/A</span>{% endif %}</td>
+        <td>{% if row.has_levelup == 'yes' %}<span style="color:#fbbf24">Yes</span>{% else %}<span class="na">No</span>{% endif %}</td>
+        <td class="note-cell">{{ row.excludes or '' }}</td>
+        <td style="font-size:11px">{{ row.reg_end or '' }}</td>
+        <td style="font-size:11px">{{ row.reward_end or '' }}</td>
+        <td class="note-cell">{{ row.notes or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Source: DBS Bank (Hong Kong) &mdash; T&amp;Cs for Existing Customers</p>
+</div>
+{% endif %}
+
+{# ===== US TREASURY YIELD CURVE ===== #}
+{% if treasury_yields %}
+<div class="section">
+  <div class="section-title">&#127974; US Treasury Yield Curve</div>
+  <table>
+    <thead>
+      <tr><th>Maturity</th><th>Yield</th><th>7d Change</th></tr>
+    </thead>
+    <tbody>
+      {% for row in treasury_yields %}
+      <tr>
+        <td class="rate-name">{{ row.maturity }}</td>
+        <td class="rate-value">{{ row.value }}</td>
+        <td>{{ row.change_7d }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Source: US Department of the Treasury</p>
+  {% if yield_curve_chart %}
+  <div style="margin-top:12px">
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Yield Curve Shape</div>
+    {{ yield_curve_chart }}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ===== RATE FORECASTS ===== #}
+<div class="section">
+  <div class="section-title">&#128302; Market Rate Expectations</div>
+
+  {% if fedwatch %}
+  <h4 style="color:#94a3b8;font-size:12px;margin-bottom:6px;">FedWatch - FOMC Meeting Rate Probabilities</h4>
+  <table class="forecast-table">
+    <thead>
+      <tr>
+        <th>Meeting</th>
+        {% for rate_range in fedwatch_ranges %}
+        <th>{{ rate_range }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for meeting in fedwatch %}
+      <tr>
+        <td class="rate-name">{{ meeting.meeting }}</td>
+        {% for rate_range in fedwatch_ranges %}
+        <td>
+          {% if meeting.probabilities.get(rate_range) %}
+          <span class="prob-bar" style="width:{{ meeting.probabilities[rate_range] * 0.6 }}px"></span>
+          {{ "%.1f"|format(meeting.probabilities[rate_range]) }}%
+          {% else %}—{% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Source: Investing.com Fed Rate Monitor (based on Fed Funds Futures)</p>
+  {% else %}
+  <p style="color:#94a3b8;font-size:12px;">FedWatch data unavailable.</p>
+  {% endif %}
+
+  {% if hkd_forwards %}
+  <h4 style="color:#94a3b8;font-size:12px;margin:12px 0 6px;">HKD Forward Points (Implied Future Rates)</h4>
+  <table class="forecast-table">
+    <thead>
+      <tr><th>Tenor</th><th>Bid</th><th>Offer</th></tr>
+    </thead>
+    <tbody>
+      {% for row in hkd_forwards %}
+      <tr>
+        <td class="rate-name">{{ row.tenor }}</td>
+        <td class="rate-value">{{ row.bid }}</td>
+        <td class="rate-value">{{ row.offer }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="source">Source: HKMA (HKD Forward Exchange Rates)</p>
+  {% endif %}
+</div>
+
+<div class="footer">
+  r_monitor &mdash; Automated Interest Rate Tracker<br>
+  Data may be delayed. Not financial advice.
+</div>
+
+</body>
+</html>
