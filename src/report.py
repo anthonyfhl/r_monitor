@@ -439,10 +439,10 @@ def generate_report(data: dict) -> str:
                 "sparkline": _sparkline_from_csv("hibor_daily", col_name),
             })
 
-    # HSBC WPL Rate (<1m) = HIBOR 1M + 1.2%
+    # HSBC WPL Rate (<1m) = HIBOR 1M + 0.7%
     hibor_1m = hibor.get("1 Month")
     if hibor_1m is not None:
-        wpl_rate = hibor_1m + 1.2
+        wpl_rate = hibor_1m + 0.7
         hkd_rates.append({
             "name": "HSBC WPL Rate (&lt;1m)",
             "value": _fmt_rate(wpl_rate),

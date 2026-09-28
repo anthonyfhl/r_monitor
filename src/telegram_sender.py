@@ -149,7 +149,7 @@ def build_summary(data: dict) -> str:
         if h3m is not None:
             lines.append(f"🇭🇰 HIBOR 3M: <b>{h3m:.4f}%</b>")
         if h1m is not None:
-            wpl = h1m + 1.2
+            wpl = h1m + 0.7
             lines.append(f"🏠 HSBC WPL (&lt;1m): <b>{wpl:.4f}%</b>")
 
     # Prime rates
