@@ -1,282 +1,162 @@
-"""r_monitor - Daily Interest Rate Monitor
-
-Entry point that orchestrates: fetch → store → report → send
-"""
-
+"""Daily rate collection -> archive -> web application -> change notifications."""
+import argparse
+import html
 import logging
 import sys
 from datetime import datetime
 
-from src.config import DATA_DIR, REPORTS_DIR
-from src.fetchers.hkma import (
-    fetch_hibor_latest,
-    fetch_hkd_forward_rates,
-)
-from src.fetchers.banks import fetch_all_prime_rates
+from src.config import DATA_DIR
+from src.esaver import consume_inbox, store_promotion, notify_new_promotions
+from src.fetchers.banks import fetch_hsbc_prime, fetch_hase_prime, fetch_dbs_prime
+from src.fetchers.hkma import fetch_hibor_latest, fetch_hkd_forward_rates
 from src.fetchers.ib_rates import fetch_ib_margin_rates
 from src.fetchers.fred import fetch_fed_funds_rate
-from src.fetchers.treasury import fetch_treasury_yields
 from src.fetchers.ny_fed import fetch_sofr_latest
+from src.fetchers.treasury import fetch_treasury_yields
 from src.fetchers.fedwatch import fetch_fedwatch_probabilities
 from src.fetchers.dbs_esaver import fetch_esaver_current
-from src.storage import append_row, append_rows
-from src.report import generate_report
-from src.telegram_sender import send_message, send_document, build_summary
-from src.health import record_fetch_result, get_alerts, check_staleness
+from src.health import record_fetch_result, load_health
+from src.http_client import RefusalError, GuardError
+from src.loans import calculate_loans, notify_changes, APP_URL
+from src.state import file_lock, read_json, write_json, LockBusyError, RECOVERY_EVENTS
+from src.storage import upsert_row
+from src.telegram_sender import send_message
+from src.web_app import build_dashboard, SNAPSHOT_FILE
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",handlers=[logging.StreamHandler(sys.stdout)])
+logger=logging.getLogger(__name__)
 
 
-def fetch_all() -> dict:
-    """Fetch all rates from all sources. Gracefully handles per-source failures."""
-    data = {}
-
-    # --- HKD Rates ---
-    logger.info("Fetching HIBOR...")
+def _checked(source, function, valid):
     try:
-        data["hibor"] = fetch_hibor_latest()
-        logger.info(f"HIBOR: {data['hibor']}")
-        record_fetch_result("hibor", True)
-    except Exception as e:
-        logger.error(f"HIBOR fetch failed: {e}")
-        data["hibor"] = {}
-        record_fetch_result("hibor", False)
+        result=function()
+        if not valid(result):
+            raise ValueError(f"{source}: source returned incomplete or invalid data")
+        record_fetch_result(source,True)
+        return result
+    except Exception as exc:
+        logger.exception("Fetch failed for %s",source)
+        from src.repair import repair_source
+        outcome=repair_source(source,exc)
+        record_fetch_result(source,False,str(exc),outcome)
+        return None
 
-    logger.info("Fetching bank Prime Rates...")
-    try:
-        data["prime_rates"] = fetch_all_prime_rates()
-        logger.info(f"Prime Rates: {data['prime_rates']}")
-        record_fetch_result("prime_rates", True)
-    except Exception as e:
-        logger.error(f"Prime Rates fetch failed: {e}")
-        data["prime_rates"] = []
-        record_fetch_result("prime_rates", False)
 
-    logger.info("Fetching IB Margin Rates...")
-    try:
-        data["ib_rates"] = fetch_ib_margin_rates()
-        logger.info(f"IB Rates: {data['ib_rates']}")
-        record_fetch_result("ib_rates", True)
-    except Exception as e:
-        logger.error(f"IB Rates fetch failed: {e}")
-        data["ib_rates"] = {}
-        record_fetch_result("ib_rates", False)
-
-    # --- USD Rates ---
-    logger.info("Fetching Fed Funds Rate...")
-    try:
-        data["fed_funds"] = fetch_fed_funds_rate()
-        logger.info(f"Fed Funds: {data['fed_funds']}")
-        record_fetch_result("fed_funds", True)
-    except Exception as e:
-        logger.error(f"Fed Funds fetch failed: {e}")
-        data["fed_funds"] = {}
-        record_fetch_result("fed_funds", False)
-
-    logger.info("Fetching SOFR...")
-    try:
-        data["sofr"] = fetch_sofr_latest()
-        logger.info(f"SOFR: {data['sofr']}")
-        record_fetch_result("sofr", True)
-    except Exception as e:
-        logger.error(f"SOFR fetch failed: {e}")
-        data["sofr"] = {}
-        record_fetch_result("sofr", False)
-
-    logger.info("Fetching Treasury Yields...")
-    try:
-        data["treasury"] = fetch_treasury_yields()
-        logger.info(f"Treasury: {len(data['treasury'])} maturities")
-        record_fetch_result("treasury", True)
-    except Exception as e:
-        logger.error(f"Treasury fetch failed: {e}")
-        data["treasury"] = {}
-        record_fetch_result("treasury", False)
-
-    # --- Forecasts ---
-    logger.info("Fetching FedWatch Probabilities...")
-    try:
-        data["fedwatch"] = fetch_fedwatch_probabilities()
-        logger.info(f"FedWatch: {len(data['fedwatch'])} meetings")
-        record_fetch_result("fedwatch", True)
-    except Exception as e:
-        logger.error(f"FedWatch fetch failed: {e}")
-        data["fedwatch"] = []
-        record_fetch_result("fedwatch", False)
-
-    logger.info("Fetching HKD Forward Rates...")
-    try:
-        data["hkd_forwards"] = fetch_hkd_forward_rates()
-        logger.info(f"HKD Forwards: {len(data['hkd_forwards'])} tenors")
-        record_fetch_result("hkd_forwards", True)
-    except Exception as e:
-        logger.error(f"HKD Forwards fetch failed: {e}")
-        data["hkd_forwards"] = []
-        record_fetch_result("hkd_forwards", False)
-
-    logger.info("Fetching DBS eSaver Promotion...")
-    try:
-        data["esaver"] = fetch_esaver_current()
-        logger.info(f"DBS eSaver: {data['esaver']}")
-        record_fetch_result("esaver", True)
-    except Exception as e:
-        logger.error(f"DBS eSaver fetch failed: {e}")
-        data["esaver"] = {}
-        record_fetch_result("esaver", False)
-
+def fetch_all():
+    data={}
+    jobs=[
+        ("hibor",fetch_hibor_latest,lambda r:r.get("date") and r.get("1 Month") is not None),
+        ("ib_rates",fetch_ib_margin_rates,lambda r:all(r.get(k) and r[k].get("rate") is not None for k in ["HKD","USD"])),
+        ("fed_funds",fetch_fed_funds_rate,lambda r:r.get("date") and all(r.get(k) is not None for k in ["effective","target_upper","target_lower"])),
+        ("sofr",fetch_sofr_latest,lambda r:r.get("date") and r.get("rate") is not None),
+        ("treasury",fetch_treasury_yields,lambda r:r.get("date") and r.get("10 Yr") is not None),
+        ("fedwatch",fetch_fedwatch_probabilities,lambda r:bool(r)),
+        ("hkd_forwards",fetch_hkd_forward_rates,lambda r:bool(r) and all(v.get("forward_points") is not None for v in r)),
+        ("esaver",fetch_esaver_current,lambda r:r.get("id") and r.get("rates")),
+    ]
+    # Fetch each bank independently; no HSBC substitution for Hang Seng.
+    data["prime_rates"]=[]
+    for bank,fn in [("HSBC",fetch_hsbc_prime),("HASE",fetch_hase_prime),("DBS",fetch_dbs_prime)]:
+        value=_checked("prime_"+bank,fn,lambda r:r.get("rate") is not None)
+        if value:
+            data["prime_rates"].append(value)
+    for source,fn,valid in jobs:
+        logger.info("Fetching %s",source)
+        value=_checked(source,fn,valid)
+        data[source]=value if value is not None else ([] if source in ["fedwatch","hkd_forwards"] else {})
     return data
 
 
-def store_data(data: dict) -> None:
-    """Store fetched data to CSV files for historical tracking."""
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    # HIBOR
-    hibor = data.get("hibor", {})
-    if hibor:
-        row = {"date": hibor.get("date", today)}
-        row.update({k: v for k, v in hibor.items() if k != "date"})
-        append_row("hibor_daily", row)
-
-    # Prime Rates
-    prime_rates = data.get("prime_rates", [])
-    if prime_rates:
-        row = {"date": today}
-        for pr in prime_rates:
-            if pr.get("rate") is not None:
-                row[pr["bank"]] = pr["rate"]
-        if len(row) > 1:
-            append_row("prime_rates", row)
-
-    # IB Rates
-    ib = data.get("ib_rates", {})
-    ib_row = {"date": today}
-    if ib.get("HKD") and ib["HKD"].get("rate") is not None:
-        ib_row["hkd_rate"] = ib["HKD"]["rate"]
-    if ib.get("USD") and ib["USD"].get("rate") is not None:
-        ib_row["usd_rate"] = ib["USD"]["rate"]
-    if len(ib_row) > 1:
-        append_row("ib_rates", ib_row)
-
-    # Fed Funds
-    fed = data.get("fed_funds", {})
-    if fed.get("effective") is not None:
-        append_row("fed_rates", {
-            "date": fed.get("date", today),
-            "rate": fed["effective"],
-            "target_upper": fed.get("target_upper"),
-            "target_lower": fed.get("target_lower"),
-        })
-
-    # SOFR
-    sofr = data.get("sofr", {})
-    if sofr.get("rate") is not None:
-        append_row("sofr", {"date": sofr.get("date", today), "rate": sofr["rate"]})
-
-    # Treasury Yields
-    treasury = data.get("treasury", {})
-    if treasury and treasury.get("date"):
-        row = {k: v for k, v in treasury.items()}
-        append_row("treasury_yields", row)
-
-    # DBS eSaver - upsert by promo_month
-    esaver = data.get("esaver", {})
-    if esaver.get("promo_month"):
-        _upsert_esaver(esaver)
+def store_data(data):
+    today=datetime.now().date().isoformat()
+    if data.get("hibor"):
+        upsert_row("hibor_daily",data["hibor"])
+    if data.get("prime_rates"):
+        upsert_row("prime_rates",{"date":today,**{p["bank"]:p["rate"] for p in data["prime_rates"]}})
+    ib=data.get("ib_rates") or {}
+    if ib:
+        upsert_row("ib_rates",{"date":today,"hkd_rate":ib["HKD"]["rate"],"usd_rate":ib["USD"]["rate"]})
+    fed=data.get("fed_funds") or {}
+    if fed:
+        upsert_row("fed_rates",{"date":fed["date"],"rate":fed["effective"],"target_upper":fed["target_upper"],"target_lower":fed["target_lower"]})
+    sofr=data.get("sofr") or {}
+    if sofr:
+        upsert_row("sofr",{"date":sofr["date"],"rate":sofr["rate"]})
+    if data.get("treasury"):
+        upsert_row("treasury_yields",data["treasury"])
+    if data.get("esaver"):
+        store_promotion(data["esaver"])
+    loans=calculate_loans(data,today)
+    data["loans"]=loans
+    if loans:
+        row={"date":today}
+        for key,loan in loans.items():
+            row[key]=loan["rate"]
+            row[key+"_source_date"]=loan["source_date"]
+            row[key+"_base_rate"]=loan["base_rate"]
+        upsert_row("loan_rates",row)
+    # Old aggregate health key cannot override individual bank checks.
+    health=load_health()
+    health.pop("prime_rates",None)
+    write_json(DATA_DIR/"fetch_health.json",health)
+    data["updated_at"]=datetime.now().astimezone().isoformat()
+    write_json(SNAPSHOT_FILE,data)
 
 
-def _upsert_esaver(esaver: dict) -> None:
-    """Update or insert an eSaver promotion row by promo_month."""
-    from src.storage import load_csv, save_csv
-    import pandas as pd
-
-    df = load_csv("esaver_history")
-    month = esaver["promo_month"]
-
-    if not df.empty and "promo_month" in df.columns:
-        mask = df["promo_month"].astype(str) == str(month)
-        if mask.any():
-            # Update existing row with any new non-None values
-            idx = df[mask].index[0]
-            for k, v in esaver.items():
-                if v is not None and k in df.columns:
-                    df.at[idx, k] = v
-            save_csv("esaver_history", df)
-            logger.info(f"Updated eSaver row for {month}")
-            return
-
-    # Append new row
-    new_row = pd.DataFrame([esaver])
-    df = pd.concat([df, new_row], ignore_index=True)
-    df = df.sort_values("promo_month").reset_index(drop=True)
-    save_csv("esaver_history", df)
-    logger.info(f"Added new eSaver row for {month}")
+def notify_health(sender):
+    state_path=DATA_DIR/"alert_notifications.json"
+    old=read_json(state_path)
+    health=load_health()
+    signature={k:(v.get("error") or "fetch failure") for k,v in health.items() if v.get("ok") is False}
+    # Recovery is also a meaningful change, with the verified outcome.
+    if signature == old.get("failures",{}):
+        return True
+    lines=["⚠️ <b>利率監察有資料未更新</b>" if signature else "✅ <b>利率監察資料已恢復</b>"]
+    for source in signature:
+        labels={"esaver":"DBS eSaver","fedwatch":"美國議息機率","hkd_forwards":"港元遠期匯價","hibor":"銀行同業拆息","prime_HASE":"恒生最優惠利率","prime_HSBC":"滙豐最優惠利率","prime_DBS":"星展最優惠利率","ib_rates":"盈透證券融資","fed_funds":"美國聯邦基金利率","sofr":"美元有抵押隔夜融資利率","treasury":"美國國債收益率","telegram":"Telegram 通知"}
+        lines.append("⚠️ "+labels.get(source,source)+"："+html.escape(health[source].get("repair") or signature[source]))
+    if not signature:
+        lines.append("🔧 已重新取得及驗證原有來源")
+    lines.append(f'🌐 <a href="{APP_URL}">查看利率監察</a>')
+    if not sender("\n".join(lines)):
+        return False
+    write_json(state_path,{"failures":signature})
+    return True
 
 
-def main():
-    """Main entry point."""
-    logger.info("=" * 60)
-    logger.info("r_monitor - Interest Rate Monitor")
-    logger.info(f"Run time: {datetime.now().isoformat()}")
-    logger.info("=" * 60)
-
-    # 1. Fetch all data
-    logger.info("Step 1: Fetching rates from all sources...")
-    data = fetch_all()
-
-    # 1b. Check for persistent fetch failures
-    alerts = get_alerts(threshold=3)
-    if alerts:
-        alert_msg = "\u26a0\ufe0f <b>Fetch Alert</b>\n\nThe following sources have failed 3+ consecutive days:\n"
-        for src in alerts:
-            alert_msg += f"  \u2022 {src}\n"
-        logger.warning(f"Fetch alerts: {alerts}")
-        send_message(alert_msg)
-
-    # 1c. Check for stale data
-    stale = check_staleness(threshold_days=3)
-    if stale:
-        stale_msg = "\u26a0\ufe0f <b>Stale Data Warning</b>\n\n"
-        for name, last_date, gap in stale:
-            stale_msg += f"  \u2022 {name}: last update {last_date} ({gap}d ago)\n"
-        logger.warning(f"Stale data: {stale}")
-        send_message(stale_msg)
-
-    # 2. Store to CSV
-    logger.info("Step 2: Storing data to CSV...")
-    store_data(data)
-
-    # 3. Generate HTML report & send (weekly only — default Sunday)
-    now = datetime.now()
-    weekly = "--weekly" in sys.argv or now.weekday() == 6  # Sunday
-    if weekly:
-        logger.info("Step 3: Generating HTML report (weekly)...")
-        html = generate_report(data)
-
-        report_path = REPORTS_DIR / f"r_{now.strftime('%Y-%m-%d')}.html"
-        report_path.write_text(html, encoding="utf-8")
-        logger.info(f"Report saved to {report_path}")
-
-        # 4. Send via Telegram
-        logger.info("Step 4: Sending via Telegram...")
-        summary = build_summary(data)
-        msg_ok = send_message(summary)
-        doc_ok = send_document(report_path, caption="Interest Rate Monitor Report")
-        ok = msg_ok and doc_ok
-        if ok:
-            logger.info("Telegram report sent successfully!")
-        else:
-            logger.warning("Telegram send had issues — check logs above")
-    else:
-        logger.info("Step 3: Skipping report (not weekly run day). Use --weekly to force.")
-
-    logger.info("Done!")
-    return 0
+def main(argv=None):
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--build-only",action="store_true",help="Rebuild the web app without HTTP calls or notifications")
+    parser.add_argument("--no-notify",action="store_true",help="Collect real data without Telegram sends")
+    parser.add_argument("--weekly",action="store_true",help="Legacy flag, no longer sends HTML reports")
+    args=parser.parse_args(argv)
+    try:
+        with file_lock(DATA_DIR/"monitor.lock"):
+            if args.build_only:
+                consume_inbox()
+                build_dashboard()
+                return 0
+            data=fetch_all()
+            store_data(data)
+            consume_inbox()
+            ok=True
+            if not args.no_notify:
+                ok=notify_changes(data["loans"],send_message)
+                ok=notify_new_promotions(send_message) and ok
+                ok=notify_health(send_message) and ok
+            data["delivery_ok"]=ok
+            data["repair_events"]=list(dict.fromkeys(RECOVERY_EVENTS))
+            write_json(SNAPSHOT_FILE,data)
+            build_dashboard()
+            failures=[k for k,v in load_health().items() if v.get("ok") is False]
+            logger.info("Web app updated. Unavailable sources: %s",failures)
+            return 1 if failures or not ok else 0
+    except LockBusyError:
+        logger.warning("Another monitor instance owns the lock; original inbox preserved")
+        return 0
+    except OSError as exc:
+        logger.exception("Monitor could not acquire lock or write files; original data preserved: %s",exc)
+        return 1
 
 
 if __name__ == "__main__":

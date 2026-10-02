@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
-import requests
+from src import http_client as requests
 
 from src.config import FRED_API_KEY, FRED_BASE, FRED_SERIES, REQUEST_TIMEOUT
 
@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 def _fred_get(series_id: str, start_date: str | None = None, end_date: str | None = None) -> list[dict]:
     """Fetch observations from FRED for a given series."""
     if not FRED_API_KEY:
-        logger.error("FRED_API_KEY not set")
-        return []
+        raise RuntimeError("FRED_API_KEY not set")
 
     params = {
         "series_id": series_id,
@@ -26,6 +25,8 @@ def _fred_get(series_id: str, start_date: str | None = None, end_date: str | Non
         params["observation_start"] = start_date
     if end_date:
         params["observation_end"] = end_date
+    if not start_date:
+        params["limit"] = 5
 
     resp = requests.get(FRED_BASE, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
@@ -49,7 +50,8 @@ def fetch_fed_funds_rate() -> dict:
             obs = _fred_get(series_id)
             if obs:
                 latest = obs[0]
-                result["date"] = latest.get("date", "")
+                if key == "fed_funds_effective":
+                    result["date"] = latest.get("date", "")
                 if key == "fed_funds_effective":
                     result["effective"] = float(latest["value"])
                 elif key == "fed_funds_target_upper":
@@ -58,6 +60,7 @@ def fetch_fed_funds_rate() -> dict:
                     result["target_lower"] = float(latest["value"])
         except Exception as e:
             logger.error(f"Failed to fetch FRED series {series_id}: {e}")
+            raise
 
     return result
 

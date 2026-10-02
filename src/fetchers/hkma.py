@@ -9,7 +9,7 @@ HKMA API is still used for HKD forward rates.
 import logging
 from datetime import datetime, timedelta
 
-import requests
+from src import http_client as requests
 
 from src.config import (
     HKMA_FORWARD,
@@ -46,7 +46,7 @@ def fetch_hibor_latest() -> dict:
     data = resp.json()
 
     if data.get("isHoliday"):
-        for offset in range(1, 5):
+        for offset in range(1, 11):
             prev = now - timedelta(days=offset)
             resp = requests.get(
                 HKAB_HIBOR_URL,
@@ -59,8 +59,7 @@ def fetch_hibor_latest() -> dict:
                 break
 
     if data.get("isHoliday"):
-        logger.warning("HKAB returned holiday for recent days")
-        return {}
+        raise ValueError("HKAB: no fixing within 10 days")
 
     date_str = f"{data['year']}-{data['month']:02d}-{data['day']:02d}"
     row = {"date": date_str}
@@ -97,7 +96,7 @@ def _hkma_get(url: str, params: dict | None = None, max_pages: int = 50) -> list
 
 
 def fetch_hkd_forward_rates() -> list[dict]:
-    """Fetch the latest HKD forward rates (implied interest rates from FX forwards)."""
+    """Fetch published USD/HKD forward points, not interest rates (monthly lag)."""
     params = {}
     resp = requests.get(HKMA_FORWARD, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
@@ -113,10 +112,7 @@ def fetch_hkd_forward_rates() -> list[dict]:
     for rec in records:
         if rec.get(date_key) != latest_date:
             continue
-        results.append({
-            "date": rec.get(date_key, ""),
-            "tenor": rec.get("tenor", ""),
-            "bid": rec.get("bid"),
-            "offer": rec.get("offer"),
-        })
+        for key, tenor in [("hkd_fer_1w","1 星期"),("hkd_fer_1m","1 個月"),("hkd_fer_3m","3 個月"),("hkd_fer_6m","6 個月"),("hkd_fer_9m","9 個月"),("hkd_fer_12m","12 個月")]:
+            if rec.get(key) is not None:
+                results.append({"date": rec[date_key], "tenor":tenor,"forward_points":float(rec[key]),"spot":rec.get("hkd_fer_spot")})
     return results

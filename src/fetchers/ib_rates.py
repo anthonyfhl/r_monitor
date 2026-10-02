@@ -16,7 +16,7 @@ NOT the BM spread which appears later.
 import logging
 import re
 
-import requests
+from src import http_client as requests
 from bs4 import BeautifulSoup
 
 from src.config import REQUEST_TIMEOUT, USER_AGENT
@@ -100,5 +100,6 @@ def fetch_ib_margin_rates() -> dict:
 
     except Exception as e:
         logger.error(f"Failed to fetch IB margin rates: {e}")
+        raise
 
     return result

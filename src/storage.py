@@ -1,13 +1,16 @@
 """CSV-based historical data storage for rate tracking."""
 
 import csv
+import os
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
 from src.config import DATA_DIR
+from src.state import recover_backup
 
 logger = logging.getLogger(__name__)
 
@@ -31,25 +34,27 @@ def load_csv(name: str) -> pd.DataFrame:
         if "date" in df.columns:
             df["date"] = df["date"].astype(str)
         return df
-    except Exception as e:
-        logger.error(f"Failed to load {path}: {e}")
-        return pd.DataFrame()
-
-
-def _peek_columns(path: Path) -> list[str]:
-    """Read just the header row of a CSV."""
-    try:
-        with open(path, "r", newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            return next(reader, [])
-    except Exception:
-        return []
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeError) as e:
+        try:
+            restored = recover_backup(path, pd.read_csv)
+            if "date" in restored:
+                restored["date"] = restored["date"].astype(str)
+            return restored
+        except Exception as repair_error:
+            raise RuntimeError(f"Cannot read {path}; {repair_error}; preserved original, refusing to overwrite") from e
 
 
 def save_csv(name: str, df: pd.DataFrame) -> None:
     """Save a DataFrame to CSV."""
     path = _csv_path(name)
-    df.to_csv(path, index=False)
+    temp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    df.to_csv(temp, index=False)
+    if path.exists():
+        load_csv(name)
+        backup_temp = path.with_name(path.name + f".{os.getpid()}.bak.tmp")
+        shutil.copy2(path, backup_temp)
+        os.replace(backup_temp, path.with_name(path.name + ".bak"))
+    os.replace(temp, path)
     logger.info(f"Saved {len(df)} rows to {path}")
 
 
@@ -101,6 +106,20 @@ def get_recent(name: str, days: int = 30) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
     return df[df["date"] >= cutoff].reset_index(drop=True)
+
+
+def upsert_row(name: str, row: dict, key: str = "date") -> None:
+    """Refresh today's observation without discarding other columns or dates."""
+    df = load_csv(name)
+    if not df.empty and key in df and str(row[key]) in df[key].astype(str).values:
+        idx = df.index[df[key].astype(str) == str(row[key])][0]
+        for column, value in row.items():
+            if column not in df:
+                df[column] = None
+            df.at[idx, column] = value
+    else:
+        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    save_csv(name, df.sort_values(key).reset_index(drop=True))
 
 
 def get_change(name: str, column: str, days: int = 7) -> float | None:

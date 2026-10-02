@@ -1,78 +1,24 @@
-"""Track fetch health and alert on persistent failures."""
-
-import json
-import logging
+"""Fetch outcomes including repair results; persisted atomically."""
 from datetime import datetime
-from pathlib import Path
-
-import pandas as pd
-
 from src.config import DATA_DIR
-from src.storage import load_csv
-
-logger = logging.getLogger(__name__)
+from src.state import read_json, write_json
 
 HEALTH_FILE = DATA_DIR / "fetch_health.json"
 
 
-def load_health() -> dict:
-    """Load health state from JSON file."""
-    if HEALTH_FILE.exists():
-        try:
-            return json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+def load_health():
+    return read_json(HEALTH_FILE)
 
 
-def save_health(state: dict) -> None:
-    """Save health state to JSON file."""
-    HEALTH_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
-
-
-def record_fetch_result(source: str, success: bool) -> int:
-    """Record a fetch result. Returns consecutive failure count."""
+def record_fetch_result(source, success, error="", repair=""):
     state = load_health()
-    if source not in state:
-        state[source] = {"consecutive_failures": 0, "last_success": None, "last_failure": None}
-
-    if success:
-        state[source]["consecutive_failures"] = 0
-        state[source]["last_success"] = datetime.now().isoformat()
-    else:
-        state[source]["consecutive_failures"] += 1
-        state[source]["last_failure"] = datetime.now().isoformat()
-
-    save_health(state)
-    return state[source]["consecutive_failures"]
+    info = state.setdefault(source, {"consecutive_failures": 0})
+    info["consecutive_failures"] = 0 if success else info.get("consecutive_failures", 0) + 1
+    info["last_success" if success else "last_failure"] = datetime.now().astimezone().isoformat()
+    info.update(ok=success, error=str(error), repair=repair)
+    write_json(HEALTH_FILE, state)
+    return info["consecutive_failures"]
 
 
-def get_alerts(threshold: int = 3) -> list[str]:
-    """Get list of sources with consecutive failures >= threshold."""
-    state = load_health()
-    return [
-        source for source, info in state.items()
-        if info.get("consecutive_failures", 0) >= threshold
-    ]
-
-
-def check_staleness(threshold_days: int = 3) -> list[tuple[str, str, int]]:
-    """Check each CSV for stale data.
-
-    Returns list of (csv_name, last_date, days_stale) for stale sources.
-    """
-    stale = []
-    csvs_to_check = ["hibor_daily", "fed_rates", "sofr", "treasury_yields", "ib_rates"]
-    today = pd.Timestamp.now().normalize()
-
-    for name in csvs_to_check:
-        df = load_csv(name)
-        if df.empty or "date" not in df.columns:
-            stale.append((name, "no data", -1))
-            continue
-        last_date = pd.to_datetime(df["date"]).max()
-        gap = (today - last_date).days
-        if gap > threshold_days:
-            stale.append((name, str(last_date.date()), gap))
-
-    return stale
+def get_alerts(threshold=1):
+    return [k for k, v in load_health().items() if v.get("consecutive_failures", 0) >= threshold]

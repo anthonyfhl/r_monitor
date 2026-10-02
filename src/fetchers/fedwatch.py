@@ -13,7 +13,7 @@ Removed: CME FedWatch direct access (all endpoints return 403/401).
 import logging
 import re
 
-import requests
+from src import http_client as requests
 from bs4 import BeautifulSoup
 
 from src.config import REQUEST_TIMEOUT, USER_AGENT
@@ -112,6 +112,7 @@ def fetch_fedwatch_probabilities() -> list[dict]:
         return _parse_investing_page(resp.text)
     except Exception as e:
         logger.error(f"Failed to fetch FedWatch data from investing.com: {e}")
+        raise
         return []
 
 

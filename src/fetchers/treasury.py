@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from io import StringIO
 
-import requests
+from src import http_client as requests
 
 from src.config import REQUEST_TIMEOUT, USER_AGENT
 
@@ -41,6 +41,7 @@ def fetch_treasury_yields() -> dict:
         return _parse_treasury_xml(resp.text)
     except Exception as e:
         logger.error(f"Failed to fetch Treasury yields: {e}")
+        raise
         return {}
 
 

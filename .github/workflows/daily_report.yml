@@ -1,9 +1,7 @@
 name: Daily Interest Rate Report
 
 on:
-  schedule:
-    # Run at 04:00 UTC = 12:00 HKT (after HIBOR fixing at 11:15 HKT)
-    - cron: '0 4 * * *'  # Every day (including weekends for Sunday report)
+  # Local Windows task is the only writer. No cloud cron / duplicate sender.
   workflow_dispatch:  # Allow manual trigger
 
 permissions:

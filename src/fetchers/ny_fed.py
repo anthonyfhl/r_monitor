@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
-import requests
+from src import http_client as requests
 
 from src.config import REQUEST_TIMEOUT
 
@@ -37,6 +37,7 @@ def fetch_sofr_latest() -> dict:
         }
     except Exception as e:
         logger.error(f"Failed to fetch SOFR: {e}")
+        raise
         return {}
 
 
