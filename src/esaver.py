@@ -54,7 +54,7 @@ def notify_new_promotions(sender, state_path=None):
                  f"⏰ 登記截止 {offer['reg_end']}｜比較存款餘額日期 {offer['benchmark_date']}"]
         if offer.get("excluded_months"):
             lines.append("⚠️ 已登記 " + "、".join(offer["excluded_months"]) + " 推廣者不適用；其他限制見條款")
-        lines.append(f'🌐 <a href="{APP_URL}#esaver">查看及記錄家人登記</a>')
+        lines.append(f'<a href="{APP_URL}#esaver">🔗</a>')
         if not sender("\n".join(lines)):
             return False
         state["seen"].append(offer["id"])

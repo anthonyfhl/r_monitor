@@ -123,7 +123,7 @@ def notify_health(sender):
         lines.append("⚠️ "+labels.get(source,source)+"："+html.escape(health[source].get("repair") or signature[source]))
     if not signature:
         lines.append("🔧 已重新取得及驗證原有來源")
-    lines.append(f'🌐 <a href="{APP_URL}">查看利率監察</a>')
+    lines.append(f'<a href="{APP_URL}">🔗</a>')
     if not sender("\n".join(lines)):
         return False
     write_json(state_path,{"failures":signature})

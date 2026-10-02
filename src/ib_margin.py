@@ -50,7 +50,7 @@ def notify_margin_changes(rates, sender, state_path=None):
             lines.append(f"💵 {label}首級 <b>{tiers[0]['rate']:.3f}%</b>；分級條款有變，請查看完整利率表")
     lines.append(f"📅 {changed[0][2]['date']}｜專業帳戶方案（{html.escape(changed[0][2]['plan'])}）")
     message = "\n".join(["🔔 <b>盈透證券借款：" + "｜".join(titles) + "</b>", *lines,
-                         f'🌐 <a href="{APP_URL}#ib-margin">查看分級利率與借款試算</a>'])
+                         f'<a href="{APP_URL}#ib-margin">🔗</a>'])
     if not sender(message):
         return False
     for ccy, old, item in changed:

@@ -64,7 +64,7 @@ def notify_changes(loans, sender, state_path=None):
         icon = "🔺" if change > 0 else "🔻"
         lines.append(f"{icon} {loan['name']}：{old['rate']:.5f}% → <b>{loan['rate']:.5f}%</b>（{change:+.5f} 百分點）")
         lines.append(f"📅 基準日期 {loan['source_date']}｜{loan['formula']}")
-    lines.append(f'🌐 <a href="{APP_URL}">查看利率監察</a>')
+    lines.append(f'<a href="{APP_URL}">🔗</a>')
     if not sender("\n".join(lines)):
         return False
     for key, old, loan in changes:
