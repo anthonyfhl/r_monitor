@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const pct = (value, digits=3) => Number.isFinite(value) ? `${value.toFixed(digits)}%` : '—';
 const shortDate = value => value ? value.slice(5).replace('-','/') : '—';
 const colors = ['#c25e36','#287765','#8497aa','#b79454','#836e97','#55765c','#b97082','#527e91'];
-let data, registrations, group='hkd', loanDays=90, hiddenSeries=new Set(), pendingRecords=new Map(), marginLinkOpened=false;
+let data, registrations, group='hkd', loanDays=90, hiddenSeries=new Set(), marginLinkOpened=false;
 
 function navigate(){
   const page = location.hash === '#esaver' ? 'esaver' : 'rates';
@@ -98,7 +98,6 @@ function renderWarnings(){
   if(data.updated_at&&new Date()-new Date(data.updated_at)>36*3600000)messages.unshift('每日資料已超過 36 小時未更新；下方為最後有效紀錄。');
   if(!data.delivery_ok)messages.push('Telegram 未確認送達；變動紀錄已保留，通知尚未完成。');
   if(registrations?.sync_errors?.length)messages.push(...registrations.sync_errors);
-  if(registrations?.sync_mode!=='every_minute')messages.push('家人紀錄每分鐘同步尚未安裝；Windows 管理員確認待完成。收件紀錄會由每日 12:00 排程處理。');
   $('warnings').innerHTML=messages.length?`<details class="warning" open><summary>⚠ ${messages.length} 項資料或通知需要留意</summary>${messages.map(m=>`<p>${esc(m)}</p>`).join('')}</details>`:'';
 }
 function sourceName(key){return {hibor:'銀行同業拆息',prime_HSBC:'滙豐最優惠利率',prime_HASE:'恒生最優惠利率',prime_DBS:'星展最優惠利率',ib_rates:'盈透證券融資',fed_funds:'聯邦基金利率',sofr:'美元隔夜融資',treasury:'美國國債',fedwatch:'美國議息機率',hkd_forwards:'港元遠期匯價',esaver:'DBS eSaver'}[key]||key;}
@@ -117,10 +116,10 @@ function renderEsaver(){
   $('member-list').innerHTML=(registrations.members||[]).map(m=>`<option value="${esc(m)}"></option>`).join('');
   $('registered-date').max=new Date().toLocaleDateString('en-CA');
   $('period-count').textContent=`${offers.length} 期`;
-  const records={...registrations.registrations};pendingRecords.forEach((value,key)=>{records[key]=value;});
+  const records=registrations.registrations;
   $('promotion-table').innerHTML=offers.map(o=>{
     const members=Object.values(records).filter(r=>r.promo_id===o.id&&r.status==='registered');
-    return `<tr><td><strong>${esc(o.promo_month)}</strong><br><span class="muted">${o.source_kind==='official'?'官方驗證':'Excel 匯入'}</span></td><td>${esc(o.reward_start)}<br>${esc(o.reward_end)}</td><td>${o.days}</td><td>${esc(o.benchmark_date||'—')}</td><td>${esc(o.reg_end||'—')}</td>${labels.map(([k])=>`<td class="number">${pct(o.rates[k])}</td>`).join('')}<td>${esc((o.excluded_months||[]).join('、')||'—')}</td><td>${esc(o.previous_valid_end||'—')}</td><td>${esc(o.gap_days??'—')}</td><td>${members.length?members.map(m=>`<span class="member-chip" title="${esc(m.registered_on||'未記錄實際登記日期')}">${esc(m.member)}${pendingRecords.has(`${o.id}|${m.member}`)?' · 同步中':''}</span>`).join(''):'<span class="muted">未有記錄</span>'}</td><td><button class="edit-row" data-promo="${esc(o.id)}">記錄</button></td></tr>`;
+    return `<tr><td><strong>${esc(o.promo_month)}</strong><br><span class="muted">${o.source_kind==='official'?'官方驗證':'Excel 匯入'}</span></td><td>${esc(o.reward_start)}<br>${esc(o.reward_end)}</td><td>${o.days}</td><td>${esc(o.benchmark_date||'—')}</td><td>${esc(o.reg_end||'—')}</td>${labels.map(([k])=>`<td class="number">${pct(o.rates[k])}</td>`).join('')}<td>${esc((o.excluded_months||[]).join('、')||'—')}</td><td>${esc(o.previous_valid_end||'—')}</td><td>${esc(o.gap_days??'—')}</td><td>${members.length?members.map(m=>`<span class="member-chip" title="${esc(m.registered_on||'未記錄實際登記日期')}">${esc(m.member)}</span>`).join(''):'<span class="muted">未有記錄</span>'}</td><td><button class="edit-row" data-promo="${esc(o.id)}">記錄</button></td></tr>`;
   }).join('');
   document.querySelectorAll('[data-promo]').forEach(b=>b.addEventListener('click',()=>{$('promo-select').value=b.dataset.promo;$('registration-form').scrollIntoView({behavior:'smooth',block:'center'});$('member-input').focus();}));
 }
@@ -135,8 +134,8 @@ function render(){
   const forwards=data.hkd_forwards||[];
   $('forwards').innerHTML=forwards.length?forwards.map(f=>`<div class="outlook-card"><p>${esc(f.tenor)}</p><strong>${esc(f.forward_points)}</strong><p>遠期點子</p></div>`).join(''):'<p class="muted">本次未有已驗證遠期匯價。</p>';
   $('forward-date').textContent=forwards.length?`${data.health?.hkd_forwards?.ok===false?'⚠ 本次更新失敗，顯示上次有效紀錄 · ':''}官方資料日期 ${forwards[0].date} · 月度統計有公布延遲 · 每點為 0.0001 港元兌 1 美元的匯價差`:'金管局月度統計 · 與利率嘅單位不同';
-  $('footer-status').textContent=`家人紀錄同步：${registrations.synced_at?new Date(registrations.synced_at).toLocaleTimeString('zh-HK',{hour12:false}):'Excel 匯入'}`;
-  if(!$('save-status').textContent.startsWith('已收到')&&!$('save-status').textContent.startsWith('保存未完成'))$('save-status').textContent=registrations.sync_mode==='every_minute'?'家人紀錄每分鐘同步。':'每分鐘同步待安裝；現由每日排程處理。';
+  $('footer-status').textContent=`家人紀錄更新：${registrations.synced_at?new Date(registrations.synced_at).toLocaleTimeString('zh-HK',{hour12:false}):'Excel 匯入'}`;
+
   navigate();
 }
 
@@ -149,9 +148,9 @@ async function load(){
   $('refresh').disabled=true;
   try{
     const values=[await getJSON('data.json'),await getJSON('registrations.json')];
-    data=values[0];registrations=values[1];
+    data=values[0];
+    if(!registrations||values[1].sync_errors?.length||values[1].version>=registrations.version)registrations=values[1];
     if(!Array.isArray(data.loans)||!Array.isArray(data.promotions)||!registrations.registrations)throw new Error('監察資料格式不完整；已保留現有畫面。');
-    for(const [key,value] of pendingRecords)if(registrations.processed_event_ids?.includes(value.event_id)||registrations.registrations[key]?.event_id===value.event_id)pendingRecords.delete(key);
     $('load-error').hidden=true;render();
     if(location.hash==='#ib-margin'&&!marginLinkOpened){$('ib-margin').scrollIntoView();marginLinkOpened=true;}
   }catch(error){$('load-error').hidden=false;$('load-error').textContent=error.message;}
@@ -164,25 +163,23 @@ document.querySelectorAll('#loan-range button').forEach(b=>b.addEventListener('c
 document.querySelectorAll('#market-group button').forEach(b=>b.addEventListener('click',()=>{group=b.dataset.group;document.querySelectorAll('#market-group button').forEach(x=>x.classList.toggle('selected',x===b));renderMarkets();}));
 function fillRegistration(){
   const key=`${$('promo-select').value}|${$('member-input').value.trim()}`;
-  const record=pendingRecords.get(key)||registrations?.registrations?.[key];
+  const record=registrations?.registrations?.[key];
   $('status-select').value=record?.status||'registered';$('registered-date').value=record?.registered_on||'';
 }
 $('member-input').addEventListener('change',fillRegistration);$('promo-select').addEventListener('change',fillRegistration);
+const saveFamilyRecord=registrationSaver.createSaver({send:(...args)=>monitorHTTP.send(...args),storage:sessionStorage,makeId:()=>crypto.randomUUID()});
 $('registration-form').addEventListener('submit',async event=>{
   event.preventDefault();if(!data||!registrations)return;
   const member=$('member-input').value.trim();
   if(!member){$('save-status').textContent='請填寫家人名字。';return;}
-  const payload={event_id:crypto.randomUUID(),promo_id:$('promo-select').value,member,status:$('status-select').value,registered_on:$('registered-date').value||null};
+  const fields={promo_id:$('promo-select').value,member,status:$('status-select').value,registered_on:$('registered-date').value||null};
   $('save-button').disabled=true;$('save-status').textContent='正在保存…';
   try{
-    const response=await monitorHTTP.send('inbox',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'esaver_registration',payload})});
-    if(!response.ok)throw new Error(`保存未完成（HTTP ${response.status}），資料仍在表格內。${response.status===429?'請稍後再手動保存。':''}`);
-    const result=await response.json();if(result.ok!==true)throw new Error('伺服器未確認保存；請保留表格資料。');
-    pendingRecords.set(`${payload.promo_id}|${member}`,payload);
-    if(!registrations.members.includes(member))registrations.members.push(member);
-    renderEsaver();$('save-status').textContent=registrations.sync_mode==='every_minute'?'已收到紀錄；約 1 分鐘內同步至其他裝置。':'已收到紀錄；每分鐘同步尚未啟用，現由每日排程處理。';
+    const saved=await saveFamilyRecord(fields);
+    if(saved.sync_errors?.length||saved.version>=registrations.version)registrations=saved;
+    renderEsaver();renderWarnings();
+    $('save-status').textContent='已保存，重新開啟或在其他裝置更新頁面即可見到。';
   }catch(error){$('save-status').textContent=error.message;}
   finally{$('save-button').disabled=false;}
 });
-setInterval(()=>{if(!document.hidden&&data&&monitorHTTP.canAutoLoad())load();},60000);
 navigate();load();

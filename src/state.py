@@ -52,7 +52,10 @@ def read_json(path: Path, default=None):
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    with temp.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
+        handle.flush()
+        os.fsync(handle.fileno())
     if path.exists():
         # A corrupt previous value cannot become the backup or be overwritten.
         read_json(path)

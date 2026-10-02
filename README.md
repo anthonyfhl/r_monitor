@@ -33,9 +33,9 @@ Windows 排程 `\r_monitor_daily` 每日香港時間 12:00 執行 `main.py`，�
 
 網頁可選推廣期、家人、登記狀態及實際日期，也可加入家人或更正紀錄。這是個人紀錄；完成 DBS app 登記後再填寫。
 
-Hub 把已驗證身分的寫入送到自己的附加式收件箱。`\r_monitor_web_sync` 每分鐘執行 `sync_web.py`，消費收件箱、保存紀錄並原子更新網頁資料；不會呼叫銀行。每日收集也會消費一次。已收件的變更即時顯示「同步中」，其他裝置約一分鐘可見。
+按保存後，既有 hub 驗證登入及同源請求，直接呼叫本 project 的 `save_registration.py`。程式驗證內容、用獨立短時間鎖保存正式紀錄並更新展示資料，核對檔案後才回覆成功；沒有家人同步排程。每筆提交的識別碼與正式紀錄存於同一個原子寫入檔案，回覆遺失後重試不會重複或覆蓋後來的更正。其他裝置重新開啟或按更新即可讀到。
 
-安裝同步排程：以管理員 PowerShell 執行 `install_web_sync.ps1`。沿用每日排程的 Windows S4U 身分（登出後仍可運作），同一時間只允許一個執行個體。
+舊收件箱只保留作遷移及備查；已收件事件仍由既有每日流程／人工重建消費，以免遺漏歷史提交。`sync_web.py` 保留為人工修復工具，沒有排程。
 
 ## 失敗與修復
 
@@ -56,9 +56,9 @@ python -m pip install -r requirements.txt
 python main.py                  # 收集、保存、發布、按變動通知
 python main.py --no-notify      # 收集及發布，不發 Telegram
 python main.py --build-only     # 只重建網頁及消費收件箱，沒有網絡呼叫
-python sync_web.py              # 只同步家人紀錄
+python sync_web.py              # 人工修復展示檔案及遷移舊收件箱，沒有排程
 python -m pytest tests -q --basetemp logs/pytest-r-monitor
-node --test tests/test_web_guard.cjs tests/test_margin.cjs
+node --test tests/test_web_guard.cjs tests/test_margin.cjs tests/test_registration_save.cjs
 ```
 
 `.env` 需要 `FRED_API_KEY`、`TELEGRAM_BOT_TOKEN` 及 `TELEGRAM_CHAT_ID`。

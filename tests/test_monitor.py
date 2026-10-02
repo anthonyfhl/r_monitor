@@ -25,6 +25,7 @@ def isolated(tmp_path,monkeypatch):
     monkeypatch.setattr(esaver,"DATA_DIR",tmp_path)
     for name in ["PROMOTIONS_FILE","REGISTRATIONS_FILE","NOTIFICATIONS_FILE","CURSOR_FILE"]:
         monkeypatch.setattr(esaver,name,tmp_path/(name.lower()+".json"))
+    write_json(esaver.REGISTRATIONS_FILE,{"members":["Mum","Fong","Pik"],"registrations":{},"version":0})
     return tmp_path
 
 

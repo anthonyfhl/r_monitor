@@ -1,4 +1,4 @@
-"""One-minute local inbox sync; never fetches bank data or sends rate messages."""
+"""Manual legacy-inbox / missing-asset repair. No scheduled task uses this file."""
 import logging
 import sys
 from src.config import DATA_DIR, PROJECT_ROOT
@@ -19,9 +19,8 @@ def main():
             publish_registrations()
             return 1 if records.get("sync_errors") else 0
     except LockBusyError:
-        # Busy daily collector owns the lock; the next sync processes the inbox.
-        logging.warning("Daily collector owns the lock; inbox preserved for next sync")
-        return 0
+        logging.warning("Daily collector owns the lock; manual repair did not run, legacy inbox preserved")
+        return 1
     except Exception:
         logging.exception("Inbox sync failed; records preserved")
         return 1

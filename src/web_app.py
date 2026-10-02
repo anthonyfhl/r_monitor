@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import pandas as pd
 from src.config import DATA_DIR, REPORTS_DIR, PROJECT_ROOT
-from src.esaver import PROMOTIONS_FILE, REGISTRATIONS_FILE
+from src.esaver import PROMOTIONS_FILE, REGISTRATIONS_FILE, publish_registrations as _publish_registrations
 from src.health import load_health
 from src.loans import TERMS
 from src.state import read_json, write_json, RECOVERY_EVENTS
@@ -101,11 +101,4 @@ def build_dashboard():
 
 
 def publish_registrations():
-    APP_DIR.mkdir(parents=True,exist_ok=True)
-    records=read_json(REGISTRATIONS_FILE,{"members":[],"registrations":{},"version":0,"sync_errors":[]})
-    schedule=read_json(PROJECT_ROOT/"logs"/"web_sync_install.json")
-    records["sync_mode"]="every_minute" if schedule.get("ok") is True else "daily_only"
-    if RECOVERY_EVENTS:
-        records["sync_errors"]=list(dict.fromkeys(records.get("sync_errors",[]) + RECOVERY_EVENTS))
-        write_json(REGISTRATIONS_FILE,records)
-    write_json(APP_DIR / "registrations.json",records)
+    return _publish_registrations(APP_DIR, REGISTRATIONS_FILE)

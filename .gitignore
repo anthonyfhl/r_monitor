@@ -45,6 +45,7 @@ data/loan_notifications.json
 data/ib_margin_notifications.json
 data/alert_notifications.json
 data/monitor.lock
+data/registrations.lock
 data/repair_state.json
 data/esaver_promotions.json
 data/esaver_registrations.json
