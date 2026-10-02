@@ -11,6 +11,7 @@ Windows 排程 `\r_monitor_daily` 每日香港時間 12:00 執行 `main.py`，�
 - 滙豐 Wealth Portfolio Lending（滙財組合貸款）：1 個月香港銀行同業拆息 + 0.5 百分點。
 - 恒生 Asset Link（抵押透支）：恒生自己公布的港元最優惠利率 − 1.75 百分點。
 - 香港銀行同業拆息、各銀行最優惠利率、盈透證券港元及美元融資息率。
+- IB（盈透證券）孖展借款：每日核對 IBKR Pro 專業帳戶方案的港元、美元全部級別；利率、借款級別或附加條款有變時發 Telegram。網頁顯示完整分級表及借款金額加權息率／30 日利息試算；涉及大額附加費或個別條款的金額會停止試算並說明原因。
 - 美國聯邦基金有效利率及目標範圍、有抵押隔夜融資利率、美國國債收益率、議息機率。
 - 金管局的港元遠期匯價點子（有月度公布延遲，並非利率）。
 - DBS eSaver **現有客戶**推廣。官方網頁的嵌入資料含有息率級別、比較存款餘額日期、登記截止、計息期及獎賞存入日；不能拿新客戶優惠代替。
@@ -20,6 +21,7 @@ Windows 排程 `\r_monitor_daily` 每日香港時間 12:00 執行 `main.py`，�
 ## Telegram
 
 - 貸款息率相對上次成功通知有變才發訊息；初次取得資料建立基準。
+- IB 借款通知亦以最後確認送達的全部級別為基準；首次建立基準，沒有變動不重複發送。
 - 新一期現有客戶 eSaver 出現時通知一次，送達未獲確認則保留待辦。
 - 資料失敗或恢復通知附上修復結果；網頁同時顯示異常。
 - **已停止所有 HTML 附件及每星期報告推送**。`--weekly` 只保留舊參數兼容。
@@ -55,7 +57,7 @@ python main.py --no-notify      # 收集及發布，不發 Telegram
 python main.py --build-only     # 只重建網頁及消費收件箱，沒有網絡呼叫
 python sync_web.py              # 只同步家人紀錄
 python -m pytest tests -q --basetemp logs/pytest-r-monitor
-node --test tests/test_web_guard.cjs
+node --test tests/test_web_guard.cjs tests/test_margin.cjs
 ```
 
 `.env` 需要 `FRED_API_KEY`、`TELEGRAM_BOT_TOKEN` 及 `TELEGRAM_CHAT_ID`。

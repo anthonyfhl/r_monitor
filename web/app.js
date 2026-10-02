@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const pct = (value, digits=3) => Number.isFinite(value) ? `${value.toFixed(digits)}%` : '—';
 const shortDate = value => value ? value.slice(5).replace('-','/') : '—';
 const colors = ['#c25e36','#287765','#8497aa','#b79454','#836e97','#55765c','#b97082','#527e91'];
-let data, registrations, group='hkd', loanDays=90, hiddenSeries=new Set(), pendingRecords=new Map();
+let data, registrations, group='hkd', loanDays=90, hiddenSeries=new Set(), pendingRecords=new Map(), marginLinkOpened=false;
 
 function navigate(){
   const page = location.hash === '#esaver' ? 'esaver' : 'rates';
@@ -67,6 +67,30 @@ function renderMarkets(){
   }).join('');
 }
 
+const currencyName={HKD:'港元',USD:'美元'};
+const money=(value,ccy)=>`${ccy==='HKD'?'HK$':'US$'}${value.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+const tierRange=t=>t.upper===null?`超過 ${t.lower.toLocaleString('en')}`:t.lower===0?`首 ${t.upper.toLocaleString('en')}`:`${t.lower.toLocaleString('en')}–${t.upper.toLocaleString('en')}`;
+function marginCurrent(ccy){
+  const item=data.ib_margin?.[ccy];
+  return item?.tiers?.length&&data.health?.ib_rates?.ok===true&&item.date&&new Date()-new Date(item.date)<=36*3600000?item:null;
+}
+function renderMarginCalculator(){
+  const ccy=$('margin-currency').value,item=marginCurrent(ccy);
+  try{
+    if(!item)throw new Error('本次未有已驗證嘅 IB 借款級別；取得新資料後先可以試算。');
+    const result=marginMath.calculateMargin(item,Number($('margin-amount').value));
+    $('margin-result').innerHTML=`<div class="margin-estimate"><div><p>加權平均年利率</p><strong>${pct(result.rate,5)}</strong></div><div><p>30 日利息估算</p><strong>${money(result.dailyInterest*30,ccy)}</strong></div></div><p class="margin-breakdown">${result.segments.map(s=>`${money(s.amount,ccy)} × ${pct(s.rate)}`).join(' ＋ ')}<br>每段按 ${result.dayBasis} 日計每日利息</p>`;
+  }catch(error){$('margin-result').innerHTML=`<p class="margin-error" role="alert">⚠ ${esc(error.message)}</p>`;}
+}
+function renderMargin(){
+  $('margin-cards').innerHTML=['HKD','USD'].map(ccy=>{
+    const item=marginCurrent(ccy);
+    if(!item)return `<article class="margin-card"><h3>${currencyName[ccy]} · ${ccy}</h3><p class="margin-error">本次未有完整、已驗證嘅借款利率。</p></article>`;
+    return `<article class="margin-card"><div class="margin-card-heading"><h3>${currencyName[ccy]} · ${ccy}</h3><span class="badge">${esc(item.plan)}</span></div><div class="margin-headline"><strong>${pct(item.rate)}</strong><span>首 ${ccy} ${item.tiers[0].upper.toLocaleString('en')} 年利率</span></div><table class="margin-table"><thead><tr><th>分段借款額 · ${ccy}</th><th class="number">年利率</th></tr></thead><tbody>${item.tiers.map(t=>`<tr><td>${tierRange(t)}${t.notes.length?' <span class="margin-note-marker">*</span>':''}</td><td class="number">${pct(t.rate)}${t.notes.length?' *':''}</td></tr>`).join('')}</tbody></table>${item.tiers.some(t=>t.notes.length)?'<p class="margin-special">* 大額級別另有附加費或個別條款；公布利率未包含個別調整。</p>':''}<p class="margin-date">官方網頁核對日期 ${esc(item.date)}</p></article>`;
+  }).join('');
+  renderMarginCalculator();
+}
+
 function renderWarnings(){
   const failures=Object.entries(data.health||{}).filter(([key,value])=>value.ok===false);
   const messages=failures.map(([key,value])=>`${sourceName(key)}：${value.repair||value.error}`);
@@ -105,12 +129,12 @@ function safeSource(url){try{const u=new URL(url);return u.protocol==='https:'&&
 function render(){
   $('updated').textContent=data.updated_at?`最近更新 ${new Date(data.updated_at).toLocaleString('zh-HK',{timeZone:'Asia/Hong_Kong',hour12:false})} · 香港時間`:'未有每日資料更新紀錄';
   $('today').textContent=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric',timeZone:'Asia/Hong_Kong'});
-  renderLoans();renderMarkets();renderEsaver();renderWarnings();
+  renderLoans();renderMargin();renderMarkets();renderEsaver();renderWarnings();
   const meetings=(data.fedwatch||[]).filter(m=>new Date(m.meeting)>=new Date(new Date().toDateString())).slice(0,4);
   $('outlook').innerHTML=meetings.length?meetings.map(m=>`<div class="outlook-card"><p>${esc(m.meeting)}</p><strong>${esc(m.most_likely)}%</strong><p>機率 ${pct(m.most_likely_pct,1)}</p><div class="prob-bar"><span style="width:${Math.max(0,Math.min(100,m.most_likely_pct))}%"></span></div></div>`).join(''):'<p class="muted">本次未有已驗證議息機率。</p>';
   const forwards=data.hkd_forwards||[];
   $('forwards').innerHTML=forwards.length?forwards.map(f=>`<div class="outlook-card"><p>${esc(f.tenor)}</p><strong>${esc(f.forward_points)}</strong><p>遠期點子</p></div>`).join(''):'<p class="muted">本次未有已驗證遠期匯價。</p>';
-  $('forward-date').textContent=forwards.length?`官方資料日期 ${forwards[0].date} · 月度統計有公布延遲 · 每點為 0.0001 港元兌 1 美元的匯價差`:'金管局月度統計 · 與利率嘅單位不同';
+  $('forward-date').textContent=forwards.length?`${data.health?.hkd_forwards?.ok===false?'⚠ 本次更新失敗，顯示上次有效紀錄 · ':''}官方資料日期 ${forwards[0].date} · 月度統計有公布延遲 · 每點為 0.0001 港元兌 1 美元的匯價差`:'金管局月度統計 · 與利率嘅單位不同';
   $('footer-status').textContent=`家人紀錄同步：${registrations.synced_at?new Date(registrations.synced_at).toLocaleTimeString('zh-HK',{hour12:false}):'Excel 匯入'}`;
   if(!$('save-status').textContent.startsWith('已收到')&&!$('save-status').textContent.startsWith('保存未完成'))$('save-status').textContent=registrations.sync_mode==='every_minute'?'家人紀錄每分鐘同步。':'每分鐘同步待安裝；現由每日排程處理。';
   navigate();
@@ -129,10 +153,13 @@ async function load(){
     if(!Array.isArray(data.loans)||!Array.isArray(data.promotions)||!registrations.registrations)throw new Error('監察資料格式不完整；已保留現有畫面。');
     for(const [key,value] of pendingRecords)if(registrations.processed_event_ids?.includes(value.event_id)||registrations.registrations[key]?.event_id===value.event_id)pendingRecords.delete(key);
     $('load-error').hidden=true;render();
+    if(location.hash==='#ib-margin'&&!marginLinkOpened){$('ib-margin').scrollIntoView();marginLinkOpened=true;}
   }catch(error){$('load-error').hidden=false;$('load-error').textContent=error.message;}
   finally{$('refresh').disabled=false;}
 }
 $('refresh').addEventListener('click',load);
+$('margin-currency').addEventListener('change',()=>{$('margin-amount').value=$('margin-currency').value==='HKD'?'1000000':'100000';renderMarginCalculator();});
+$('margin-amount').addEventListener('input',()=>{if(data)renderMarginCalculator();});
 document.querySelectorAll('#loan-range button').forEach(b=>b.addEventListener('click',()=>{loanDays=Number(b.dataset.days);document.querySelectorAll('#loan-range button').forEach(x=>x.classList.toggle('selected',x===b));renderLoans();renderMarkets();}));
 document.querySelectorAll('#market-group button').forEach(b=>b.addEventListener('click',()=>{group=b.dataset.group;document.querySelectorAll('#market-group button').forEach(x=>x.classList.toggle('selected',x===b));renderMarkets();}));
 function fillRegistration(){

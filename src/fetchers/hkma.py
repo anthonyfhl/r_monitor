@@ -97,7 +97,9 @@ def _hkma_get(url: str, params: dict | None = None, max_pages: int = 50) -> list
 
 def fetch_hkd_forward_rates() -> list[dict]:
     """Fetch published USD/HKD forward points, not interest rates (monthly lag)."""
-    params = {}
+    # Official API supports a one-row descending query; do not fetch an
+    # unnecessary default page of 100 historical observations every day.
+    params = {"pagesize":1,"sortby":"end_of_day","sortorder":"desc"}
     resp = requests.get(HKMA_FORWARD, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     records = resp.json().get("result", {}).get("records", [])

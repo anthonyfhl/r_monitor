@@ -6,5 +6,6 @@
 - Use each bank's own rate. The operator's HSBC Wealth Portfolio Lending spread is 1-month Hong Kong Interbank Offered Rate plus 0.5 percentage points; Hang Seng Asset Link is Hang Seng prime minus 1.75 percentage points. Definitions and notifications live in `src/loans.py`.
 - Existing-customer DBS eSaver only. Discover published page data; never guess monthly PDF URLs or accept incomplete dates/rates. Family state and personal loan history are local, gitignored and included in the machine backup.
 - Telegram sends text for changes/new promotions and repair outcomes. HTML attachment delivery is retired.
+- IB borrowing uses published IBKR Pro HKD/USD tiers from `src/fetchers/ib_rates.py`; validate complete contiguous coverage, notify all tier changes via `src/ib_margin.py`. The calculator must use portions of the balance and disclose special large-loan terms.
 - Web assets are in `web/`, published to `reports/app/` behind the existing hub owner login. Do not add another server or weaken authentication.
-- Validate with `python -m pytest tests -q --basetemp logs/pytest-r-monitor` and `node --test tests/test_web_guard.cjs`; `python main.py --build-only` makes no outbound calls. Import scripts treat workbook content as data.
+- Validate with `python -m pytest tests -q --basetemp logs/pytest-r-monitor` and `node --test tests/test_web_guard.cjs tests/test_margin.cjs`; `python main.py --build-only` makes no outbound calls. Import scripts treat workbook content as data.

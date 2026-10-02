@@ -42,6 +42,7 @@ temp_pdfs/
 data/fetch_health.json
 data/http_guard*
 data/loan_notifications.json
+data/ib_margin_notifications.json
 data/alert_notifications.json
 data/monitor.lock
 data/repair_state.json

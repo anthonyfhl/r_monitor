@@ -1,6 +1,7 @@
 """Daily rate collection -> archive -> web application -> change notifications."""
 import argparse
 import html
+import json
 import logging
 import sys
 from datetime import datetime
@@ -18,10 +19,11 @@ from src.fetchers.dbs_esaver import fetch_esaver_current
 from src.health import record_fetch_result, load_health
 from src.http_client import RefusalError, GuardError
 from src.loans import calculate_loans, notify_changes, APP_URL
+from src.ib_margin import notify_margin_changes
 from src.state import file_lock, read_json, write_json, LockBusyError, RECOVERY_EVENTS
 from src.storage import upsert_row
 from src.telegram_sender import send_message
-from src.web_app import build_dashboard, SNAPSHOT_FILE
+from src.web_app import build_dashboard, SNAPSHOT_FILE, last_valid_forwards
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",handlers=[logging.StreamHandler(sys.stdout)])
 logger=logging.getLogger(__name__)
@@ -46,7 +48,7 @@ def fetch_all():
     data={}
     jobs=[
         ("hibor",fetch_hibor_latest,lambda r:r.get("date") and r.get("1 Month") is not None),
-        ("ib_rates",fetch_ib_margin_rates,lambda r:all(r.get(k) and r[k].get("rate") is not None for k in ["HKD","USD"])),
+        ("ib_rates",fetch_ib_margin_rates,lambda r:all(r.get(k) and r[k].get("tiers") and r[k].get("rate") is not None for k in ["HKD","USD"])),
         ("fed_funds",fetch_fed_funds_rate,lambda r:r.get("date") and all(r.get(k) is not None for k in ["effective","target_upper","target_lower"])),
         ("sofr",fetch_sofr_latest,lambda r:r.get("date") and r.get("rate") is not None),
         ("treasury",fetch_treasury_yields,lambda r:r.get("date") and r.get("10 Yr") is not None),
@@ -69,13 +71,17 @@ def fetch_all():
 
 def store_data(data):
     today=datetime.now().date().isoformat()
+    if not data.get("hkd_forwards") and load_health().get("hkd_forwards",{}).get("ok") is False:
+        data["hkd_forwards"]=last_valid_forwards(read_json(SNAPSHOT_FILE))
     if data.get("hibor"):
         upsert_row("hibor_daily",data["hibor"])
     if data.get("prime_rates"):
         upsert_row("prime_rates",{"date":today,**{p["bank"]:p["rate"] for p in data["prime_rates"]}})
     ib=data.get("ib_rates") or {}
     if ib:
-        upsert_row("ib_rates",{"date":today,"hkd_rate":ib["HKD"]["rate"],"usd_rate":ib["USD"]["rate"]})
+        upsert_row("ib_rates",{"date":today,"hkd_rate":ib["HKD"]["rate"],"usd_rate":ib["USD"]["rate"],
+                               "hkd_tiers":json.dumps(ib["HKD"]["tiers"],separators=(",",":")),
+                               "usd_tiers":json.dumps(ib["USD"]["tiers"],separators=(",",":"))})
     fed=data.get("fed_funds") or {}
     if fed:
         upsert_row("fed_rates",{"date":fed["date"],"rate":fed["effective"],"target_upper":fed["target_upper"],"target_lower":fed["target_lower"]})
@@ -142,6 +148,7 @@ def main(argv=None):
             ok=True
             if not args.no_notify:
                 ok=notify_changes(data["loans"],send_message)
+                ok=notify_margin_changes(data.get("ib_rates") or {},send_message) and ok
                 ok=notify_new_promotions(send_message) and ok
                 ok=notify_health(send_message) and ok
             data["delivery_ok"]=ok
