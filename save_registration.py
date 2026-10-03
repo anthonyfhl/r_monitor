@@ -7,12 +7,13 @@ import logging
 import sys
 
 from src.esaver import save_registration, InvalidRegistration
+from src.dsb import save as save_dsb
 
 
 def main():
     try:
         event = json.loads(sys.stdin.buffer.read(8193).decode("utf-8"))
-        result = save_registration(event)
+        result = save_dsb(event) if event.get('kind') == 'dsb_month' else save_registration(event)
     except (InvalidRegistration, json.JSONDecodeError, UnicodeDecodeError) as exc:
         result = {"ok": False, "status": 400, "error": str(exc)}
     except Exception:

@@ -7,10 +7,11 @@ const colors = ['#c25e36','#287765','#8497aa','#b79454','#836e97','#55765c','#b9
 let data, registrations, group='hkd', loanDays=90, hiddenSeries=new Set(), marginLinkOpened=false;
 
 function navigate(){
-  const page = location.hash === '#esaver' ? 'esaver' : 'rates';
-  $('rates-page').hidden = page !== 'rates'; $('esaver-page').hidden = page !== 'esaver';
+  const page = location.hash === '#dsb' ? 'dsb' : location.hash === '#esaver' ? 'esaver' : 'rates';
+  $('rates-page').hidden = page !== 'rates'; $('esaver-page').hidden = page !== 'esaver'; $('dsb-page').hidden = page !== 'dsb';
+  if(page==='dsb')dsbPage.show(data?.health);
   document.querySelectorAll('[data-page]').forEach(el => el.classList.toggle('active',el.dataset.page===page));
-  $('breadcrumb').textContent = page === 'esaver' ? 'eSaver 家庭紀錄' : '利率監察';
+  $('breadcrumb').textContent = page === 'dsb' ? '大新易出糧' : page === 'esaver' ? 'eSaver 家庭紀錄' : '利率監察';
 }
 window.addEventListener('hashchange',navigate);
 
@@ -100,7 +101,7 @@ function renderWarnings(){
   if(registrations?.sync_errors?.length)messages.push(...registrations.sync_errors);
   $('warnings').innerHTML=messages.length?`<details class="warning" open><summary>⚠ ${messages.length} 項資料或通知需要留意</summary>${messages.map(m=>`<p>${esc(m)}</p>`).join('')}</details>`:'';
 }
-function sourceName(key){return {hibor:'銀行同業拆息',prime_HSBC:'滙豐最優惠利率',prime_HASE:'恒生最優惠利率',prime_DBS:'星展最優惠利率',ib_rates:'盈透證券融資',fed_funds:'聯邦基金利率',sofr:'美元隔夜融資',treasury:'美國國債',fedwatch:'美國議息機率',hkd_forwards:'港元遠期匯價',esaver:'DBS eSaver'}[key]||key;}
+function sourceName(key){return {hibor:'銀行同業拆息',prime_HSBC:'滙豐最優惠利率',prime_HASE:'恒生最優惠利率',prime_DBS:'星展最優惠利率',ib_rates:'盈透證券融資',fed_funds:'聯邦基金利率',sofr:'美元隔夜融資',treasury:'美國國債',fedwatch:'美國議息機率',hkd_forwards:'港元遠期匯價',esaver:'DBS eSaver',dsb:'大新易出糧',dsb_calendar:'香港公眾假期'}[key]||key;}
 
 function renderEsaver(){
   const offers=[...(data.promotions||[])].sort((a,b)=>b.reward_start.localeCompare(a.reward_start));
@@ -149,6 +150,9 @@ async function load(){
   try{
     const values=[await getJSON('data.json'),await getJSON('registrations.json')];
     data=values[0];
+    const dsbOffer=data.dsb_current;
+    $('dsb-teaser').textContent=dsbOffer?`${dsbOffer.id} 期 · 公開出糧優惠最高 ${pct(dsbOffer.max_core_rate)} 年息`:'大新易出糧 · 條款尚未取得';
+    $('dsb-teaser-note').textContent=dsbOffer?`加息至 ${dsbOffer.reward_end} · 重新登記條款另行核對 · 最近核對 ${dsbOffer.checked_at.slice(0,10)}`:'可先填寫每日結餘，條款未完整時停止倒算';
     if(!registrations||values[1].sync_errors?.length||values[1].version>=registrations.version)registrations=values[1];
     if(!Array.isArray(data.loans)||!Array.isArray(data.promotions)||!registrations.registrations)throw new Error('監察資料格式不完整；已保留現有畫面。');
     $('load-error').hidden=true;render();

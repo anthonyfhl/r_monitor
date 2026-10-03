@@ -78,7 +78,7 @@ def _codex_repair(source, error):
     root = PROJECT_ROOT / "logs" / "repairs" / datetime.now().strftime("%Y%m%d_%H%M%S")
     workspace = root / "workspace"
     workspace.mkdir(parents=True)
-    for folder in ["src","tests","web"]:
+    for folder in ["src","tests","web","scripts"]:
         if (PROJECT_ROOT/folder).exists():
             shutil.copytree(PROJECT_ROOT/folder,workspace/folder,ignore=shutil.ignore_patterns("__pycache__"))
     for filename in ["main.py","requirements.txt"]:
@@ -114,7 +114,7 @@ def _codex_repair(source, error):
                     if p.name!="__init__.py" and (PROJECT_ROOT/"src"/"fetchers"/p.name).exists()}
         verification=root/"verification"
         verification.mkdir()
-        for folder in ["src","tests","web"]:
+        for folder in ["src","tests","web","scripts"]:
             shutil.copytree(PROJECT_ROOT/folder,verification/folder,ignore=shutil.ignore_patterns("__pycache__"))
         for filename in ["main.py","requirements.txt"]:
             shutil.copy2(PROJECT_ROOT/filename,verification/filename)

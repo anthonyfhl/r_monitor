@@ -43,6 +43,8 @@ data/fetch_health.json
 data/http_guard*
 data/loan_notifications.json
 data/ib_margin_notifications.json
+data/dsb_*.json
+data/dsb_*.lock
 data/alert_notifications.json
 data/monitor.lock
 data/registrations.lock

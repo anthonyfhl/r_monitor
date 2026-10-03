@@ -37,6 +37,20 @@ Windows 排程 `\r_monitor_daily` 每日香港時間 12:00 執行 `main.py`，�
 
 舊收件箱只保留作遷移及備查；已收件事件仍由既有每日流程／人工重建消費，以免遺漏歷史提交。`sync_web.py` 保留為人工修復工具，沒有排程。
 
+## 大新易出糧
+
+原有 hub 的 `#dsb` 頁面提供逐日結餘、月中倒算、預計資金變動、每月任務、成本與實收利息核對。預設深色緊湊版。
+
+- 每月綁定一個推廣版本；4–9 月、7–12 月、10 月至翌年 6 月分開存檔，不疊加、不自動套用最新利率。只有 2026 年 10 月登記由操作者明確確認；之前兩期的推廣日期不等於個人已登記。
+- 公開現行新客條款由銀行網頁實際連結發現，每日核對完整利率表、每月上限及條款版本；新期或變更由既有每日排程通知。重新登記文件未獨立取得時，明示以同期香港公開新客條款試算。4 月、7 月銀行重新登記文件副本已逐頁核對並保留來源網址、檔案雜湊；原優惠須完結的限制會顯示。
+- 香港假期取自政府 1823 的完整年度日曆並保留舊年度；2024 年補自政府公報。星期日、公眾假期沿用之前非紅日結餘，跨月亦然；普通星期六照計。實際提款後結餘與計息用結餘分欄。政府日曆涵蓋 2024–2027；未公布年份停止倒算。
+- 出糧優惠逐日按有效結餘及本月任務級別計，再套用每月 HK$6,000 上限；全年分母固定 365。倒算包含剩餘日子、已固定的假期利息與預計入金／提款，求最低所需總結餘，再減調整前結餘。
+- 已完成任務與月底計劃分開，新的月份不沿用已完成狀態。成本、基本年利率或實收未填時保留未知，不假定為零。VIP 利息與基本利息分開列為估算；歷史 VIP 條款未核對時不輸出假總回報。
+- 原 Excel 已唯讀匯入 10 個月、276 筆。以受限數值運算重新計算公式，不執行文件內容。原表 2025-10-31 有結餘但利息公式缺漏；2025-12 與 2026-01 缺失日子明示未填。原有歷史固定息率及已填結餘慣例獨立保存，不倒套今日條款。
+- `data/dsb_records.json` 是私人正式紀錄，另外有推廣版本、日曆和通知狀態；全部 gitignored 並包含於既有整個 D 槽備份。同步保存核對正式檔及展示檔，提交識別碼防止重覆；版本衝突保留草稿，須讀取最新紀錄並核對。
+
+首次初始化：`python scripts/import_dsb.py "C:/Users/antho/Desktop/DSB Payroll Calculation.xlsx"`（已有私人紀錄時拒絕覆蓋）。已核對公開歷史可用 `python scripts/import_dsb_references.py` 匯入；只收集大新可用 `python main.py --dsb-only --no-notify`，仍使用唯一銀行寫入鎖。平日沿用原有 12:00 排程。
+
 ## 失敗與修復
 
 所有來源和 Telegram 都經 `src/http_client.py` 的共用送出函式：
@@ -58,7 +72,7 @@ python main.py --no-notify      # 收集及發布，不發 Telegram
 python main.py --build-only     # 只重建網頁及消費收件箱，沒有網絡呼叫
 python sync_web.py              # 人工修復展示檔案及遷移舊收件箱，沒有排程
 python -m pytest tests -q --basetemp logs/pytest-r-monitor
-node --test tests/test_web_guard.cjs tests/test_margin.cjs tests/test_registration_save.cjs
+node --test tests/test_web_guard.cjs tests/test_margin.cjs tests/test_registration_save.cjs tests/test_dsb.cjs
 ```
 
 `.env` 需要 `FRED_API_KEY`、`TELEGRAM_BOT_TOKEN` 及 `TELEGRAM_CHAT_ID`。
