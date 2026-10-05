@@ -213,6 +213,10 @@ def _consume_inbox(inbox_path=None):
     archive = read_json(PROMOTIONS_FILE, {"promotions": []})
     periods = {p["id"] for p in archive["promotions"]}
     raw = inbox.read_bytes()
+    if len(raw) == cursor['offset']:
+        # A display rebuild is not a family-record update. Keep its timestamp,
+        # canonical bytes and backup when no migration events remain.
+        return records
     if len(raw) < cursor["offset"]:
         # Quarantine the old cursor and replay the surviving append-only events.
         # Saved event ids prevent duplicate records; saved registrations survive.

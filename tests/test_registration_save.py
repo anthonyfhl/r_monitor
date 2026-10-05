@@ -127,3 +127,15 @@ def test_invalid_input_preserves_canonical_file(files, change):
     with pytest.raises(ValueError):
         esaver.save_registration(bad, files)
     assert esaver.REGISTRATIONS_FILE.read_bytes() == before
+
+
+def test_rebuild_with_no_new_inbox_events_preserves_records_and_backup(files, monkeypatch):
+    inbox = esaver.DATA_DIR / 'empty-inbox.jsonl'
+    inbox.write_bytes(b'')
+    monkeypatch.setattr(esaver, 'CURSOR_FILE', esaver.DATA_DIR / 'cursor.json')
+    before = esaver.REGISTRATIONS_FILE.read_bytes()
+    backup = esaver.REGISTRATIONS_FILE.with_name(esaver.REGISTRATIONS_FILE.name + '.bak')
+    assert not backup.exists()
+    esaver.consume_inbox(inbox)
+    assert esaver.REGISTRATIONS_FILE.read_bytes() == before
+    assert not backup.exists()
