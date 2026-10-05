@@ -1,6 +1,7 @@
 """Versioned public terms and private daily balances for the authenticated hub."""
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import hashlib
 import html
 import json
@@ -201,7 +202,67 @@ def validate_month(month, item, catalog):
         if not selected['planning_date'] <= d < next_month:
             raise InvalidRegistration('預計變動日期須在調整日起至月底')
         selected['movements'].append({'date': d, 'amount': _number(move.get('amount'), '變動金額', signed=True)})
+    selected['balance_backfill'] = item.get('balance_backfill')
     return selected
+
+
+def _backfill_cents(value):
+    number = _number(value, '回填結餘')
+    scaled = Decimal(str(number)) * 100
+    if scaled != scaled.to_integral_value():
+        raise InvalidRegistration('回填結餘最多兩個小數位')
+    return int(scaled)
+
+
+def validate_backfill(item, month, patch, existing):
+    """Verify reviewed daily net movements independently before any file changes.
+
+    Today's snapshot belongs to the planning record, never the final daily ledger.
+    Normalized movements are retained for audit; free text stays in the browser.
+    """
+    audit = item.get('balance_backfill')
+    if audit is None:
+        return
+    required = {'start_date', 'anchor_date', 'anchor_balance', 'captured_at',
+                'net_changes', 'confirmed_complete', 'provisional'}
+    if not isinstance(audit, dict) or set(audit) != required or audit['confirmed_complete'] is not True or type(audit['provisional']) is not bool:
+        raise InvalidRegistration('交易回填未確認或資料格式無效')
+    start = date.fromisoformat(_date(audit['start_date']))
+    anchor = date.fromisoformat(_date(audit['anchor_date']))
+    first = date.fromisoformat(month + '-01')
+    hk_now = datetime.now(timezone(timedelta(hours=8)))
+    if not first - timedelta(days=14) <= start <= anchor or anchor.strftime('%Y-%m') != month or anchor > hk_now.date() or (anchor-start).days > 44:
+        raise InvalidRegistration('交易回填日期範圍無效')
+    try:
+        captured = datetime.fromisoformat(audit['captured_at'].replace('Z', '+00:00'))
+        if captured.tzinfo is None or captured > hk_now + timedelta(minutes=5):
+            raise ValueError()
+    except (AttributeError, TypeError, ValueError):
+        raise InvalidRegistration('結餘錄入時間無效') from None
+    if audit['provisional']:
+        if anchor != captured.astimezone(hk_now.tzinfo).date() or item['planning_date'] != audit['anchor_date'] or item['current_balance'] != audit['anchor_balance']:
+            raise InvalidRegistration('暫定結餘須保留為查閱當日嘅預測起點')
+        if audit['anchor_date'] in patch:
+            raise InvalidRegistration('暫定結餘不可同時保存為最終日終結餘')
+    elif anchor >= captured.astimezone(hk_now.tzinfo).date():
+        raise InvalidRegistration('查閱當日結餘必須標為暫定')
+    nets = audit['net_changes']
+    expected = {(start + timedelta(days=n)).isoformat() for n in range(1, (anchor-start).days+1)}
+    if not isinstance(nets, dict) or set(nets) != expected or any(type(v) is not int or abs(v) > 100000000000000 for v in nets.values()):
+        raise InvalidRegistration('交易回填每日淨變動未齊或格式無效')
+    balance = _backfill_cents(audit['anchor_balance'])
+    proposed = {**existing, **patch}
+    current = anchor
+    while current >= start:
+        if balance < 0 or balance > 100000000000000:
+            raise InvalidRegistration('交易倒推出負數或超範圍結餘')
+        if current != anchor or not audit['provisional']:
+            stored = proposed.get(current.isoformat())
+            if stored is None or _backfill_cents(stored) != balance:
+                raise InvalidRegistration(current.isoformat() + ' 回填結餘與交易倒推結果不符')
+        if current > start:
+            balance -= nets[current.isoformat()]
+        current -= timedelta(days=1)
 
 
 def save(event, app_dir=None):
@@ -235,6 +296,7 @@ def save(event, app_dir=None):
             _number(value, d + ' 結餘', nullable=True)
             if value is not None and actual > date.today():
                 raise InvalidRegistration('未來結餘請記入預計資金變動，不可標為實際紀錄')
+        validate_backfill(item, month, balances, records['balances'])
         for d, value in balances.items():
             if value is None:
                 records['balances'].pop(d, None)

@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="same-origin">
-  <title>利率與存款 · Carelogic</title><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="dsb.css"><script src="http-guard.js" defer></script><script src="margin.js" defer></script><script src="registration-save.js" defer></script><script src="dsb-math.js" defer></script><script src="dsb-save.js" defer></script><script src="dsb.js" defer></script><script src="app.js" defer></script>
+  <title>利率與存款 · Carelogic</title><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="dsb.css"><script src="http-guard.js" defer></script><script src="margin.js" defer></script><script src="registration-save.js" defer></script><script src="dsb-math.js" defer></script><script src="dsb-save.js" defer></script><script src="dsb-backfill.js?v=20261005" defer></script><script src="dsb-backfill-ui.js?v=20261005" defer></script><script src="dsb.js?v=20261005-backfill" defer></script><script src="app.js" defer></script>
 </head>
 <body>
   <aside class="rail"><a class="brand" href="/" aria-label="返回 Carelogic 首頁"><span class="brand-icon">c.</span><span>carelogic<span class="brand-small">個人財務</span></span></a><div class="rail-label">MONITOR</div><nav aria-label="頁面"><a href="#rates" class="nav-link active" data-page="rates"><span>↗</span> 利率監察</a><a href="#esaver" class="nav-link" data-page="esaver"><span>▦</span> eSaver 家庭紀錄</a><a href="#dsb" class="nav-link" data-page="dsb"><span>◴</span> 大新易出糧</a></nav><div class="rail-bottom"><span class="live-dot"></span> 每日 12:00 更新<br><span class="muted">香港時間 · 變動通知</span><a href="/">← 返回所有應用</a></div></aside>
@@ -39,6 +39,26 @@
         <div class="dsb-planner-inputs"><label>由呢日起調整結餘<input id="dsb-asof" type="date"></label><label>當日調整前結餘（港元）<input id="dsb-opening" type="number" min="0" step="0.01" placeholder="填目前／該日預計結餘"></label></div>
         <div id="dsb-calc-error" class="warning" role="status" hidden></div><div id="dsb-summary" class="dsb-stats"></div>
         <div id="dsb-chart" class="dsb-chart"></div><div id="dsb-totals" class="dsb-totals"></div><p class="footnote" id="dsb-projection-note"></p>
+      </section>
+      <section class="panel dsb-backfill-panel" aria-labelledby="dsb-backfill-title">
+        <div class="panel-heading"><div><h2 id="dsb-backfill-title">用今日結餘＋交易回填</h2><p class="muted">口語、正負號都可以；整理後先預覽，有疑問會指出。</p></div></div>
+        <div class="dsb-panel-body">
+          <label for="dsb-backfill-text">自由輸入結餘及已入帳交易（港元）</label><textarea id="dsb-backfill-text" disabled rows="5" maxlength="16000" placeholder="今日大新港元結餘 100000&#10;5號轉走5000&#10;3號收到20000&#10;其餘日子冇交易" spellcheck="false"></textarea>
+          <div class="dsb-backfill-controls"><label>由呢日起回填<input type="date" id="dsb-backfill-start" disabled></label><button id="dsb-backfill-preview" class="primary-button" type="button" disabled>整理及預覽</button></div>
+          <p id="dsb-backfill-help" class="muted"></p>
+          <div id="dsb-backfill-review" hidden>
+            <div class="dsb-backfill-controls"><label>用作倒推嘅結餘日期<input type="date" id="dsb-backfill-anchor-date"></label><label>結餘（港元）<input type="text" inputmode="decimal" id="dsb-backfill-anchor-amount"></label></div>
+            <p id="dsb-backfill-transaction-count" class="muted"></p>
+            <div class="table-wrap"><table class="dsb-backfill-table"><thead><tr><th>已入帳日期</th><th>方向</th><th>金額 · 港元</th><th></th></tr></thead><tbody id="dsb-backfill-transactions"></tbody></table></div>
+            <div class="dsb-backfill-checks"><label><input type="checkbox" id="dsb-backfill-complete"> 已列齊倒推範圍至查閱時所有已入帳交易，其餘日子冇交易</label><label><input type="checkbox" id="dsb-backfill-duplicates"> 如有同日同額同方向交易，我確認係獨立嘅多筆交易</label></div>
+            <p id="dsb-backfill-gaps" class="muted" role="status"></p>
+            <div class="table-wrap"><table class="dsb-backfill-table"><thead><tr><th>日期</th><th class="number">當日淨存入 · 港元</th><th class="number">倒推結餘 · 港元</th><th>狀態</th></tr></thead><tbody id="dsb-backfill-balances"></tbody></table></div>
+            <div class="dsb-backfill-checks"><label id="dsb-backfill-overwrite-label" hidden><input type="checkbox" id="dsb-backfill-overwrite"> <span id="dsb-backfill-overwrite-note"></span>我確認更正。</label><label><input type="checkbox" id="dsb-backfill-verified"> 已核對以上預覽、交易完整，以及結餘與交易屬於同一港元戶口</label></div>
+            <button id="dsb-backfill-apply" type="button" class="primary-button" disabled>確認並套用至本月草稿</button>
+          </div>
+          <div id="dsb-backfill-status" class="dsb-backfill-status" role="status" aria-live="polite"></div>
+          <p class="muted">結餘與交易須對應同一查閱時點。今日即時結餘標作暫定；未入帳交易不計。過去日期用銀行已入帳日倒推，不能單靠今日結餘驗證有冇漏交易。內容只在此瀏覽器整理。</p>
+        </div>
       </section>
       <div class="dsb-columns">
         <section class="panel"><div class="panel-heading"><div><h2>每日結餘</h2><p class="muted">香港紅日標紅；計息結餘沿用上一個非紅日。星期六照常。</p></div></div>

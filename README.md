@@ -41,6 +41,8 @@ Windows 排程 `\r_monitor_daily` 每日香港時間 12:00 執行 `main.py`，�
 
 原有 hub 的 `#dsb` 頁面提供逐日結餘、月中倒算、預計資金變動、每月任務、成本與實收利息核對。預設深色緊湊版。
 
+「用今日結餘＋交易回填」接受口語文字、日期、正負號及千／萬金額，在瀏覽器本機整理成可更正嘅交易與每日結餘預覽。不明方向、未入帳或其他貨幣交易會指出；未列出交易嘅日期須明確確認，重複同額交易及更正已有結餘另需核對。套用至草稿後沿用「保存本月」同步寫入，後端獨立重算每日淨變動。今日即時結餘只存作預測起點，附錄入時間及暫定標記，不保存為最終日終結餘；紅日月初需要上月結餘時，倒推起點會一併提示。自由文字留在瀏覽器分頁草稿，正式紀錄只保存已確認結餘、每日淨變動及錄入時間。
+
 - 每月綁定一個推廣版本；4–9 月、7–12 月、10 月至翌年 6 月分開存檔，不疊加、不自動套用最新利率。只有 2026 年 10 月登記由操作者明確確認；之前兩期的推廣日期不等於個人已登記。
 - 公開現行新客條款由銀行網頁實際連結發現，每日核對完整利率表、每月上限及條款版本；新期或變更由既有每日排程通知。重新登記文件未獨立取得時，明示以同期香港公開新客條款試算。4 月、7 月銀行重新登記文件副本已逐頁核對並保留來源網址、檔案雜湊；原優惠須完結的限制會顯示。
 - 香港假期取自政府 1823 的完整年度日曆並保留舊年度；2024 年補自政府公報。星期日、公眾假期沿用之前非紅日結餘，跨月亦然；普通星期六照計。實際提款後結餘與計息用結餘分欄。政府日曆涵蓋 2024–2027；未公布年份停止倒算。
@@ -72,7 +74,7 @@ python main.py --no-notify      # 收集及發布，不發 Telegram
 python main.py --build-only     # 只重建網頁及消費收件箱，沒有網絡呼叫
 python sync_web.py              # 人工修復展示檔案及遷移舊收件箱，沒有排程
 python -m pytest tests -q --basetemp logs/pytest-r-monitor
-node --test tests/test_web_guard.cjs tests/test_margin.cjs tests/test_registration_save.cjs tests/test_dsb.cjs
+node --test tests/test_web_guard.cjs tests/test_margin.cjs tests/test_registration_save.cjs tests/test_dsb.cjs tests/test_dsb_backfill.cjs
 ```
 
 `.env` 需要 `FRED_API_KEY`、`TELEGRAM_BOT_TOKEN` 及 `TELEGRAM_CHAT_ID`。

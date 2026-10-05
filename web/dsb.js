@@ -9,6 +9,20 @@
   let publicData,records,draft,month,health={},busy=false,dirty=false,lastResult;
   const saver=root.dsbSaver.createSaver({send:(...a)=>root.monitorHTTP.send(...a),storage:sessionStorage,makeId:()=>crypto.randomUUID()});
   const readNumber=id=>$(id).value.trim()===''?null:Number($(id).value);
+  const backfill=root.dsbBackfillUI.mount({
+    context(){
+      let start=month+'-01';
+      if(publicData&&draft?.record&&rule()?.balance_basis!=='entered')try{start=m.effectiveDate(start,publicData.calendar);}catch{ /* the ledger already exposes missing calendar evidence */ }
+      return {month,today:today(),start,balances:mergedBalances()};
+    },
+    apply(value){
+      gather();
+      if(value.provisional&&draft.record.movements.some(move=>move.date<value.audit.anchor_date))throw new Error('預計資金變動有今日以前嘅交易，請先核對並更正資金計劃，再套用。');
+      Object.assign(draft.balances,value.balances);draft.record.balance_backfill=value.audit;
+      if(value.provisional){draft.record.planning_date=value.audit.anchor_date;draft.record.current_balance=value.audit.anchor_balance;}
+      stash();renderForm();render();
+    }
+  });
   const rule=()=>publicData.catalog.rules[draft.record.rule_revision];
   function defaultMonth(value){
     const saved=records.months[value];if(saved)return structuredClone(saved);
@@ -84,6 +98,7 @@
     $('fill-start').value=month+'-01';$('fill-end').value=month===today().slice(0,7)?m.shift(today(),-1):m.monthDates(month).at(-1);
     $('saved-months').innerHTML='<option value="">開啟已有月份</option>'+Object.keys(records.months).sort().reverse().map(v=>`<option value="${v}">${v}</option>`).join('');
     renderTasks();
+    backfill.refresh();
   }
   function drawChart(result){
     if(!result){$('chart').innerHTML='<p class="muted dsb-empty">補齊已過日期嘅結餘後，顯示逐日累計優惠利息及月底預測。</p>';return;}
@@ -111,7 +126,7 @@
       const name=cal.names?.[date]||(new Date(date+'T00:00:00Z').getUTCDay()===0?'星期日':'');
       return `<tr class="${red?'dsb-holiday':''} ${future?'dsb-future':''}"><td><strong>${date.slice(5)}</strong><span class="dsb-day-note">${esc(name||['日','一','二','三','四','五','六'][new Date(date+'T00:00:00Z').getUTCDay()])}${date<days[0]?' · 月初追溯':''}</span></td><td><input aria-label="${date} 實際結餘" data-balance="${date}" type="number" min="0" step="0.01" value="${actual??''}" placeholder="${date>today()?'未來':'未填'}" ${date>today()?'disabled':''}></td><td class="number">${cash(effective)}<span class="dsb-day-note">${calendarError?esc(calendarError):source!==date?'沿用 '+source.slice(5):projection?.projected?'預測':'當日結餘'}</span></td><td class="number">${cash(interest)}</td><td class="number">${date.startsWith(month)&&complete?cash(Math.min(cumulative,r?.cap??0)):'—'}</td></tr>`;
     }).join('');
-    $('ledger').querySelectorAll('[data-balance]').forEach(el=>el.addEventListener('change',()=>{draft.balances[el.dataset.balance]=el.value===''?null:Number(el.value);stash();render();}));
+    $('ledger').querySelectorAll('[data-balance]').forEach(el=>el.addEventListener('change',()=>{draft.balances[el.dataset.balance]=el.value===''?null:Number(el.value);draft.record.balance_backfill=null;stash();render();}));
   }
   function renderPeriods(){
     const offers=[...publicData.catalog.offers].sort((a,b)=>b.reward_start.localeCompare(a.reward_start));
@@ -158,8 +173,10 @@
     $('reconcile').textContent=actualTotal===null?'填齊三類實收利息後核對；零利息請填 0。':!isClosed?'月結核對需將調整日期設為下月首日，並補齊本月每日紀錄。':actualEstimate===null?'估算資料未齊，暫不能核對實收差額。'+reconciliationError:`實收 ${cash(actualTotal)}｜按已完成任務估算 ${cash(actualEstimate)}｜差額 ${cash(actualTotal-actualEstimate)}`;
     const audit=records.import?.audit?.find(a=>a.month===month);
     $('import-note').textContent=audit?`Excel 匯入 ${audit.known_days}/${audit.expected_days} 日。原表優惠合計 ${cash(audit.original_cached_sum)}；逐日重算未封頂 ${cash(audit.recomputed_core_before_cap)}。${audit.complete?'':'原表缺日仍保留為未填。'}`:'';
+    const snapshot=draft.record.balance_backfill;
+    if(snapshot?.provisional)$('import-note').textContent+=` ${snapshot.anchor_date} 暫定結餘 ${cash(snapshot.anchor_balance)}（錄入 ${new Date(snapshot.captured_at).toLocaleTimeString('zh-HK',{timeZone:'Asia/Hong_Kong',hour12:false})}），未當作最終日終紀錄。`;
   }
-  function changed(){try{gather();stash();render();}catch(error){$('calc-error').hidden=false;$('calc-error').textContent=error.message;}}
+  function changed(){try{gather();const audit=draft.record.balance_backfill;if(audit?.provisional&&(audit.anchor_date!==draft.record.planning_date||audit.anchor_balance!==draft.record.current_balance))draft.record.balance_backfill=null;stash();render();}catch(error){$('calc-error').hidden=false;$('calc-error').textContent=error.message;}}
   async function read(path){const response=await root.monitorHTTP.send(path+'?t='+Date.now(),{cache:'no-store'});if(!response.ok)throw new Error(`大新紀錄讀取失敗（HTTP ${response.status}）`);return response.json();}
   async function load(force=false){
     if(busy)return;busy=true;
@@ -184,8 +201,8 @@
     });
     $('reload').addEventListener('click',()=>load(true));
     $('rebase').addEventListener('click',()=>{if(!records)return;draft.base_version=records.version;stash();$('save-status').textContent='已按目前已讀取版本保留草稿；請核對後保存。';render();});
-    $('paste').addEventListener('click',()=>{try{for(const row of m.parseLines($('bulk').value,month))draft.balances[row.date]=row.amount;stash();render();$('bulk-status').textContent='已套用至草稿，請保存。';}catch(error){$('bulk-status').textContent=error.message;}});
-    $('fill').addEventListener('click',()=>{try{const start=m.iso($('fill-start').value),end=m.iso($('fill-end').value),amount=readNumber('fill-amount');if(start>end||!start.startsWith(month)||!end.startsWith(month)||end>today()||!Number.isFinite(amount)||amount<0)throw new Error('請輸入本月已過日期範圍及非負結餘。');for(let d=start;d<=end;d=m.shift(d,1))draft.balances[d]=amount;stash();render();$('bulk-status').textContent='已按你確認嘅不變結餘填入草稿，請保存。';}catch(error){$('bulk-status').textContent=error.message;}});
+    $('paste').addEventListener('click',()=>{try{for(const row of m.parseLines($('bulk').value,month))draft.balances[row.date]=row.amount;draft.record.balance_backfill=null;stash();render();$('bulk-status').textContent='已套用至草稿，請保存。';}catch(error){$('bulk-status').textContent=error.message;}});
+    $('fill').addEventListener('click',()=>{try{const start=m.iso($('fill-start').value),end=m.iso($('fill-end').value),amount=readNumber('fill-amount');if(start>end||!start.startsWith(month)||!end.startsWith(month)||end>today()||!Number.isFinite(amount)||amount<0)throw new Error('請輸入本月已過日期範圍及非負結餘。');for(let d=start;d<=end;d=m.shift(d,1))draft.balances[d]=amount;draft.record.balance_backfill=null;stash();render();$('bulk-status').textContent='已按你確認嘅不變結餘填入草稿，請保存。';}catch(error){$('bulk-status').textContent=error.message;}});
   }
   mount();root.dsbPage={show(value){health=value||{};if(!records)load();else render();},refresh(){return load(true);}};
 })(globalThis);
