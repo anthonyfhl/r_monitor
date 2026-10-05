@@ -85,13 +85,19 @@ def build_dashboard():
         loans.append({**term,"id":key,"points":points,"current":current,
                       "latest":points[-1] if points else None,"ok":bool(current)})
     archive = read_json(PROMOTIONS_FILE,{"promotions":[]})
+    from src.dsb import CATALOG_FILE as DSB_CATALOG_FILE
+    dsb_offers = read_json(DSB_CATALOG_FILE, {'offers': []})['offers']
+    dsb_current = max((o for o in dsb_offers if o.get('revision')), key=lambda o: o['reg_start'], default=None)
     data = {"updated_at":snapshot.get("updated_at"), "built_at":datetime.now().astimezone().isoformat(),
             "loans":loans,"series":series,"health":health,"ib_margin":snapshot.get("ib_rates",{}),"promotions":archive["promotions"],
+            "dsb_current": dsb_current,
             "fedwatch":snapshot.get("fedwatch",[]),"hkd_forwards":last_valid_forwards(snapshot) if health.get("hkd_forwards",{}).get("ok") is False else snapshot.get("hkd_forwards",[]),
             "treasury":snapshot.get("treasury",{}),"fed_funds":snapshot.get("fed_funds",{}),
             "delivery_ok":snapshot.get("delivery_ok",True),"repair_events":snapshot.get("repair_events",[]) + RECOVERY_EVENTS}
     write_json(APP_DIR / "data.json",data)
     publish_registrations()
+    from src.dsb import publish as publish_dsb
+    publish_dsb(APP_DIR)
     for asset in (PROJECT_ROOT / "web").iterdir():
         if asset.suffix in (".html",".css",".js",".svg"):
             temp = APP_DIR / (asset.name + ".tmp")

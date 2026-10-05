@@ -16,6 +16,8 @@ from src.fetchers.ny_fed import fetch_sofr_latest
 from src.fetchers.treasury import fetch_treasury_yields
 from src.fetchers.fedwatch import fetch_fedwatch_probabilities
 from src.fetchers.dbs_esaver import fetch_esaver_current
+from src.fetchers.dsb_payroll import fetch_dsb_current, fetch_dsb_calendar
+from src.dsb import store_offer as store_dsb_offer, store_calendar as store_dsb_calendar, notify_changes as notify_dsb_changes
 from src.health import record_fetch_result, load_health
 from src.http_client import RefusalError, GuardError
 from src.loans import calculate_loans, notify_changes, APP_URL
@@ -55,6 +57,8 @@ def fetch_all():
         ("fedwatch",fetch_fedwatch_probabilities,lambda r:bool(r)),
         ("hkd_forwards",fetch_hkd_forward_rates,lambda r:bool(r) and all(v.get("forward_points") is not None for v in r)),
         ("esaver",fetch_esaver_current,lambda r:r.get("id") and r.get("rates")),
+        ("dsb",fetch_dsb_current,lambda r:r.get("revision") and r.get("accounts")),
+        ("dsb_calendar",fetch_dsb_calendar,lambda r:bool(r.get("years"))),
     ]
     # Fetch each bank independently; no HSBC substitution for Hang Seng.
     data["prime_rates"]=[]
@@ -92,6 +96,10 @@ def store_data(data):
         upsert_row("treasury_yields",data["treasury"])
     if data.get("esaver"):
         store_promotion(data["esaver"])
+    if data.get('dsb'):
+        store_dsb_offer(data['dsb'])
+    if data.get('dsb_calendar'):
+        store_dsb_calendar(data['dsb_calendar'])
     loans=calculate_loans(data,today)
     data["loans"]=loans
     if loans:
@@ -120,6 +128,7 @@ def notify_health(sender):
     lines=["⚠️ <b>利率監察有資料未更新</b>" if signature else "✅ <b>利率監察資料已恢復</b>"]
     for source in signature:
         labels={"esaver":"DBS eSaver","fedwatch":"美國議息機率","hkd_forwards":"港元遠期匯價","hibor":"銀行同業拆息","prime_HASE":"恒生最優惠利率","prime_HSBC":"滙豐最優惠利率","prime_DBS":"星展最優惠利率","ib_rates":"盈透證券融資","fed_funds":"美國聯邦基金利率","sofr":"美元有抵押隔夜融資利率","treasury":"美國國債收益率","telegram":"Telegram 通知"}
+        labels.update(dsb='大新易出糧',dsb_calendar='香港公眾假期')
         lines.append("⚠️ "+labels.get(source,source)+"："+html.escape(health[source].get("repair") or signature[source]))
     if not signature:
         lines.append("🔧 已重新取得及驗證原有來源")
@@ -134,6 +143,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser()
     parser.add_argument("--build-only",action="store_true",help="Rebuild the web app without HTTP calls or notifications")
     parser.add_argument("--no-notify",action="store_true",help="Collect real data without Telegram sends")
+    parser.add_argument('--dsb-only',action='store_true',help='Verify only Dah Sing and its calendar through the same daily writer')
     parser.add_argument("--weekly",action="store_true",help="Legacy flag, no longer sends HTML reports")
     args=parser.parse_args(argv)
     try:
@@ -142,6 +152,14 @@ def main(argv=None):
                 consume_inbox()
                 build_dashboard()
                 return 0
+            if args.dsb_only:
+                offer=_checked('dsb',fetch_dsb_current,lambda r:bool(r.get('accounts')))
+                calendar=_checked('dsb_calendar',fetch_dsb_calendar,lambda r:bool(r.get('years')))
+                if offer: store_dsb_offer(offer)
+                if calendar: store_dsb_calendar(calendar)
+                ok=True if args.no_notify or not offer else notify_dsb_changes(send_message)
+                build_dashboard()
+                return 0 if offer and calendar and ok else 1
             data=fetch_all()
             store_data(data)
             consume_inbox()
@@ -150,6 +168,8 @@ def main(argv=None):
                 ok=notify_changes(data["loans"],send_message)
                 ok=notify_margin_changes(data.get("ib_rates") or {},send_message) and ok
                 ok=notify_new_promotions(send_message) and ok
+                if data.get('dsb'):
+                    ok=notify_dsb_changes(send_message) and ok
                 ok=notify_health(send_message) and ok
             data["delivery_ok"]=ok
             data["repair_events"]=list(dict.fromkeys(RECOVERY_EVENTS))
