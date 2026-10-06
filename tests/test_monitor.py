@@ -33,6 +33,15 @@ def response(code,body="",headers=None):
     r=requests.Response();r.status_code=code;r._content=body.encode();r.headers.update(headers or {"Content-Type":"text/plain"});return r
 
 
+def test_304_only_permitted_for_guarded_conditional_get(isolated,monkeypatch):
+    monkeypatch.setattr(http_client.transport,'request',lambda *a,**k:response(304))
+    assert http_client.get('https://example.test/doc.pdf',headers={'If-None-Match':'v1'}).status_code==304
+    with pytest.raises(http_client.GuardError,match='redirect'):
+        http_client.get('https://example.test/doc.pdf')
+    with pytest.raises(http_client.GuardError,match='redirect'):
+        http_client.post('https://example.test/doc.pdf',headers={'If-None-Match':'v1'})
+
+
 @pytest.mark.parametrize("code",[401,403,429,409])
 def test_refusal_stops_all_account_calls_and_repeat_lengthens(isolated,monkeypatch,code):
     now=[1000000.0];monkeypatch.setattr(http_client.time,"time",lambda:now[0])
@@ -327,3 +336,34 @@ def test_missing_web_asset_repaired_from_source_without_bank_calls(isolated,monk
     (app/"http-guard.js").unlink()
     assert sync_web.main()==0
     assert (app/"http-guard.js").read_bytes()==(PROJECT_ROOT/"web"/"http-guard.js").read_bytes()
+
+
+def test_real_cached_verification_page_stops_account_and_lengthens_pause(isolated, monkeypatch):
+    # October 5 public response: HTTP 200, title "One moment, please...",
+    # body "Please wait while your request is being verified...".
+    body = (Path(__file__).parent / "fixtures/yolkinsight_verification.html").read_text(encoding="utf-8")
+    now = [1000000.0]
+    monkeypatch.setattr(http_client.time, "time", lambda: now[0])
+    sent = []
+    monkeypatch.setattr(http_client.transport, "request", lambda *a, **k: (sent.append(a) or response(200, body, {"Content-Type":"text/html"})))
+    with pytest.raises(http_client.RefusalError):
+        http_client.get("https://yolkinsight.hk/dahsing-360-payroll/")
+    first = read_json(http_client.STATE_FILE)["yolkinsight.hk"]
+    for path in ["dahsing-360-payroll/", "wp-content/uploads/2026/07/document.pdf"]:
+        with pytest.raises(http_client.RefusalError):
+            http_client.get("https://yolkinsight.hk/" + path)
+    assert len(sent) == 1
+    now[0] = first["blocked_until"] + 1
+    with pytest.raises(http_client.RefusalError):
+        http_client.get("https://yolkinsight.hk/dahsing-360-payroll/")
+    second = read_json(http_client.STATE_FILE)["yolkinsight.hk"]
+    assert second["cooldown_seconds"] > first["cooldown_seconds"]
+    with pytest.raises(http_client.RefusalError):
+        http_client.get("https://yolkinsight.hk/document.pdf")
+    assert len(sent) == 2
+
+
+def test_ordinary_article_quoting_verification_title_is_not_a_challenge(isolated, monkeypatch):
+    body = '<html><title>大新銀行易出糧重新登記</title><article>網站曾顯示 One moment, please...，請勿重試。</article></html>'
+    monkeypatch.setattr(http_client.transport, "request", lambda *a, **k: response(200, body, {"Content-Type":"text/html"}))
+    assert http_client.get("https://example.test/").status_code == 200

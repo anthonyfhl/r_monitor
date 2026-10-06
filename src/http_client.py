@@ -69,13 +69,23 @@ def _retry_after(resp, now):
     return max(0, seconds) if math.isfinite(seconds) else 0
 
 
-def request(method, url, **kwargs):
+def _refusal_body(body):
+    """Recognise account refusals and verification interstitials, not article quotes."""
+    if re.search(r"too many requests|account.{0,25}(?:suspended|banned)|cf-chl-|cf-challenge|verify you are human", body):
+        return True
+    # The observed public mirror response used HTTP 200 and an obfuscated
+    # challenge, with neither Cloudflare markers nor the word captcha.
+    title = re.search(r"<title\b[^>]*>\s*one moment,\s*please\.{0,3}\s*</title>", body)
+    return bool(title and re.search(r"please wait while your request is being verified", body))
+
+
+def request(method, url, *, retry_network=True, **kwargs):
     global _run_calls
     account = _account(url, kwargs)
     kwargs.setdefault("timeout", REQUEST_TIMEOUT)
     # No implicit requests redirects: each redirect also needs the guard.
     kwargs["allow_redirects"] = False
-    attempts = 2 if method.upper() == "GET" else 1
+    attempts = 2 if method.upper() == "GET" and retry_network else 1
     for attempt in range(attempts):
         with file_lock(LOCK_FILE):
             state = read_json(STATE_FILE)
@@ -84,6 +94,7 @@ def request(method, url, **kwargs):
             if info.get("blocked_until", 0) > now:
                 until = datetime.fromtimestamp(info["blocked_until"], timezone.utc).isoformat()
                 raise RefusalError(f"{account}: refusal cooldown until {until}; no request sent")
+            verification = info.get("blocked_until", 0) > info.get("verified_after_refusal", 0)
             day = datetime.now(timezone.utc).date().isoformat()
             if info.get("day") != day:
                 info.update(day=day, calls=0)
@@ -100,13 +111,13 @@ def request(method, url, **kwargs):
                 resp = transport.request(method, url, **kwargs)
             except transport.RequestException as exc:
                 # Never expose credential-bearing URLs from requests exceptions.
-                if attempt + 1 < attempts:
+                if attempt + 1 < attempts and not verification:
                     logger.warning("%s network failure; repair: one bounded retry", account)
                     time.sleep(2 ** (attempt + 1) + __import__("random").uniform(0, 0.5))
                     continue
                 raise GuardError(f"{account}: {type(exc).__name__}; bounded network repair failed") from None
             body = resp.text[:30000].lower() if "text" in resp.headers.get("Content-Type", "") or "json" in resp.headers.get("Content-Type", "") else ""
-            refusal_body = bool(re.search(r"too many requests|account.{0,25}(?:suspended|banned)|cf-chl-|cf-challenge|verify you are human", body))
+            refusal_body = _refusal_body(body)
             telegram_failure = False
             if account.startswith("api.telegram.org") and resp.status_code == 200:
                 telegram_failure = resp.json().get("ok") is False
@@ -118,7 +129,7 @@ def request(method, url, **kwargs):
                 write_json(STATE_FILE, state)
                 raise RefusalError(f"{account}: HTTP {resp.status_code} refusal; stopped account calls, cooldown extended (event {strikes})")
             if 500 <= resp.status_code:
-                if attempt + 1 < attempts:
+                if attempt + 1 < attempts and not verification:
                     logger.warning("%s HTTP %s; repair: one bounded retry", account, resp.status_code)
                     time.sleep(2 ** (attempt + 1) + __import__("random").uniform(0, 0.5))
                     continue
@@ -135,8 +146,17 @@ def request(method, url, **kwargs):
                     except (ValueError,AttributeError):
                         logger.warning("Bad request body could not be decoded; original status retained")
                 raise GuardError(f"{account}: HTTP {resp.status_code} bad request{detail}; same request will not be retried")
+            if resp.status_code == 304 and method.upper() == 'GET' and any(
+                    key.lower() in ('if-none-match', 'if-modified-since') for key in kwargs.get('headers', {})):
+                if verification:
+                    info["verified_after_refusal"] = info["blocked_until"]
+                    write_json(STATE_FILE, state)
+                return resp  # A conditional GET verified the caller's local cache.
             if 300 <= resp.status_code < 400:
                 raise GuardError(f"{account}: HTTP {resp.status_code} redirect; update the source URL before another call")
+            if verification:
+                info["verified_after_refusal"] = info["blocked_until"]
+                write_json(STATE_FILE, state)
             return resp
     raise GuardError(f"{account}: retry budget exhausted")
 
